@@ -1,0 +1,161 @@
+// This is your Prisma schema file
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  name         String?
+  passwordHash String?
+  role         Role      @default(USER)
+  plan         Plan      @default(FREE)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  projects     Project[]
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum Plan {
+  FREE
+  PRO
+}
+
+model Project {
+  id          String        @id @default(cuid())
+  userId      String
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title       String        @default("未命名项目")
+  status      ProjectStatus @default(OUTLINE)
+  userProfile Json          @default("{}")
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  outline     Outline?
+  literatures Literature[]
+  materials   Material[]
+  documents   GeneratedDocument[]
+  chatHistory ChatMessage[]
+}
+
+enum ProjectStatus {
+  OUTLINE
+  LITERATURE
+  MATERIALS
+  GENERATING
+  EDITING
+  COMPLETED
+}
+
+model Outline {
+  id        String    @id @default(cuid())
+  projectId String    @unique
+  project   Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  title     String    @default("")
+  abstract  String?
+  confirmed Boolean   @default(false)
+  chapters  Chapter[]
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+}
+
+model Chapter {
+  id              String  @id @default(cuid())
+  outlineId       String
+  outline         Outline @relation(fields: [outlineId], references: [id], onDelete: Cascade)
+  order           Int
+  title           String
+  description     String?
+  wordCountTarget Int     @default(1000)
+}
+
+model Literature {
+  id        String   @id @default(cuid())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  title     String
+  authors   String[]
+  year      Int?
+  abstract  String?
+  source    String?
+  fileKey   String?
+  confirmed Boolean  @default(false)
+  createdAt DateTime @default(now())
+}
+
+model Material {
+  id          String   @id @default(cuid())
+  projectId   String
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  questionKey String
+  label       String
+  fileKey     String?
+  textContent String?
+  skipped     Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  @@unique([projectId, questionKey])
+}
+
+model GeneratedDocument {
+  id                  String    @id @default(cuid())
+  projectId           String
+  project             Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  version             Int       @default(1)
+  content             Json      @default("{}")
+  status              DocStatus @default(GENERATING)
+  checkpointChapterId String?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+}
+
+enum DocStatus {
+  GENERATING
+  PAUSED
+  COMPLETED
+}
+
+model ChatMessage {
+  id        String   @id @default(cuid())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  role      String
+  content   String
+  createdAt DateTime @default(now())
+}
+
+model PromptNode {
+  id          String          @id @default(cuid())
+  name        String          @unique
+  description String?
+  currentVersion Int          @default(1)
+  testVersion    Int?
+  testUserIds    String[]      @default([])
+  callCount      Int          @default(0)
+  avgTokens      Float        @default(0)
+  versions    PromptVersion[]
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+}
+
+model PromptVersion {
+  id          String     @id @default(cuid())
+  nodeId      String
+  node        PromptNode @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+  version     Int
+  content     String
+  createdById String
+  createdAt   DateTime   @default(now())
+
+  @@unique([nodeId, version])
+}
