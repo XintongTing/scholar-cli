@@ -8,7 +8,8 @@ const createSchema = z.object({
     identity: z.string(),
     paperType: z.string(),
     field: z.string(),
-    goal: z.string()
+    goal: z.string(),
+    outlineLevel: z.string().optional()
   })
 });
 

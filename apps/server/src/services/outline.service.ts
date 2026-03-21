@@ -55,10 +55,20 @@ export async function processChatMessage(
   projectId: string,
   userId: string,
   userMessage: string,
+  fileContents: Array<{ name: string; content: string }> | undefined,
   onChunk: (text: string) => void,
   onDone: (fullText: string) => void
 ) {
-  // Save user message
+  // Build message with file contents appended
+  let fullUserMessage = userMessage;
+  if (fileContents && fileContents.length > 0) {
+    const fileSection = fileContents.map(f =>
+      `\n\n【参考文档：${f.name}】\n${f.content.slice(0, 8000)}`
+    ).join('');
+    fullUserMessage = userMessage + fileSection;
+  }
+
+  // Save user message (only the text part, not file contents)
   await prisma.chatMessage.create({
     data: { projectId, role: 'user', content: userMessage }
   });
@@ -81,7 +91,8 @@ export async function processChatMessage(
     user_identity: profile.identity || '',
     paper_type: profile.paperType || '',
     field: profile.field || '',
-    goal: profile.goal || ''
+    goal: profile.goal || '',
+    outline_level: profile.outlineLevel || '1'
   });
 
   // Build messages (exclude last user message since we pass it separately)
@@ -89,7 +100,7 @@ export async function processChatMessage(
     role: m.role as 'user' | 'assistant',
     content: m.content
   }));
-  messages.push({ role: 'user', content: userMessage });
+  messages.push({ role: 'user', content: fullUserMessage });
 
   let fullText = '';
   await streamChatCompletion(
@@ -128,7 +139,9 @@ export async function processChatMessage(
       }
 
       onDone(fullText);
-    }
+    },
+    undefined,
+    { nodeName: 'outline_generation', projectId, userId }
   );
 }
 

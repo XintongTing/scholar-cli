@@ -7,24 +7,145 @@ import { streamChatCompletion } from './integrations/claude.service.js';
 
 export type SSEReply = (event: string, data: object) => void;
 
+interface OutlineChapter {
+  id: string;
+  order: number;
+  level?: number | null;
+  parentId?: string | null;
+  title: string;
+  description?: string | null;
+  wordCountTarget?: number | null;
+}
+
+interface StartGenerationOptions {
+  restart?: boolean;
+}
+
+function sortChaptersForGeneration(chapters: OutlineChapter[]) {
+  const byParent = new Map<string | null, OutlineChapter[]>();
+
+  for (const chapter of chapters) {
+    const key = chapter.parentId ?? null;
+    const siblings = byParent.get(key) ?? [];
+    siblings.push(chapter);
+    byParent.set(key, siblings);
+  }
+
+  for (const siblings of byParent.values()) {
+    siblings.sort((a, b) => {
+      const orderDiff = (a.order ?? 0) - (b.order ?? 0);
+      if (orderDiff !== 0) return orderDiff;
+      return a.title.localeCompare(b.title, 'zh-CN');
+    });
+  }
+
+  const ordered: OutlineChapter[] = [];
+  const visited = new Set<string>();
+
+  const walk = (parentId: string | null) => {
+    const siblings = byParent.get(parentId) ?? [];
+    for (const chapter of siblings) {
+      if (visited.has(chapter.id)) continue;
+      visited.add(chapter.id);
+      ordered.push(chapter);
+      walk(chapter.id);
+    }
+  };
+
+  walk(null);
+
+  for (const chapter of chapters) {
+    if (!visited.has(chapter.id)) {
+      visited.add(chapter.id);
+      ordered.push(chapter);
+      walk(chapter.id);
+    }
+  }
+
+  return ordered;
+}
+
+function getLeafChapters(chapters: OutlineChapter[]) {
+  const parentIds = new Set(
+    chapters
+      .map((chapter) => chapter.parentId)
+      .filter((parentId): parentId is string => Boolean(parentId))
+  );
+
+  return chapters.filter((chapter) => !parentIds.has(chapter.id));
+}
+
+function buildChapterPath(chapter: OutlineChapter, chapterMap: Map<string, OutlineChapter>) {
+  const path: OutlineChapter[] = [];
+  let current: OutlineChapter | undefined = chapter;
+
+  while (current) {
+    path.unshift(current);
+    current = current.parentId ? chapterMap.get(current.parentId) : undefined;
+  }
+
+  return path;
+}
+
+function readSavedContent(raw: unknown) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {} as Record<string, string>;
+
+  const entries = Object.entries(raw as Record<string, unknown>)
+    .filter(([, value]) => typeof value === 'string')
+    .map(([key, value]) => [key, value as string]);
+
+  return Object.fromEntries(entries) as Record<string, string>;
+}
+
 export async function startGeneration(
   projectId: string,
   userId: string,
   reply: SSEReply,
-  onDone: () => void
+  onDone: () => void,
+  options: StartGenerationOptions = {}
 ) {
   const project = await projectRepo.findById(projectId);
   if (!project?.outline) throw new Error('大纲不存在');
 
-  const chapters = project.outline.chapters;
-  const doc = await genRepo.create(projectId);
-  const content: Record<string, string> = {};
+  const allChapters = sortChaptersForGeneration(project.outline.chapters);
+  const chapterMap = new Map(allChapters.map((chapter) => [chapter.id, chapter]));
+  const chapters = getLeafChapters(allChapters);
+  const latestDoc = await genRepo.findLatestByProjectId(projectId);
+  const canResume = latestDoc?.status === 'PAUSED' && !options.restart;
+  const doc = canResume
+    ? latestDoc
+    : await genRepo.create(projectId, options.restart ? {} : undefined);
+
+  if (!doc) throw new Error('生成文档初始化失败');
+
+  if (doc.status !== 'GENERATING') {
+    await genRepo.updateStatus(doc.id, 'GENERATING', null);
+  }
+
+  const content: Record<string, string> = canResume
+    ? readSavedContent(doc.content)
+    : {};
+
+  const checkpointChapterId = canResume ? doc.checkpointChapterId : null;
+  const checkpointIndex = checkpointChapterId
+    ? chapters.findIndex((chapter) => chapter.id === checkpointChapterId)
+    : -1;
+  const firstIncompleteIndex = chapters.findIndex((chapter) => !content[chapter.id]?.trim());
+
+  let startIndex = checkpointIndex >= 0 ? checkpointIndex : firstIncompleteIndex;
+  if (startIndex < 0) {
+    await genRepo.updateStatus(doc.id, 'COMPLETED');
+    await projectRepo.updateStatus(projectId, 'EDITING');
+    reply('done', { documentId: doc.id });
+    onDone();
+    return;
+  }
 
   const profile = project.userProfile as Record<string, string>;
   const ctx = await buildProjectContext(projectId);
 
-  for (const chapter of chapters) {
-    // Check if paused
+  for (let i = startIndex; i < chapters.length; i++) {
+    const chapter = chapters[i];
     const current = await genRepo.findLatestByProjectId(projectId);
     if (current?.status === 'PAUSED') {
       reply('paused', { chapterId: chapter.id });
@@ -34,21 +155,25 @@ export async function startGeneration(
     reply('progress', { chapterId: chapter.id, status: 'started' });
 
     const template = await getPromptContent('chapter_generation', userId);
+    const prevChapter = chapters[i - 1];
+    const chapterPath = buildChapterPath(chapter, chapterMap);
+    const chapterPathText = chapterPath.map((item) => item.title).join(' > ');
     const systemPrompt = assemblePrompt(template, {
       outline: ctx.outline,
-      current_chapter: `${chapter.title}\n${chapter.description || ''}`,
-      word_count_target: String(chapter.wordCountTarget),
+      current_chapter: `章节路径：${chapterPathText}\n当前生成单元：${chapter.title}\n${chapter.description || ''}`,
+      word_count_target: String(chapter.wordCountTarget ?? ''),
       literature_list: ctx.literatureList,
       materials_summary: ctx.materialsSummary,
-      previous_chapter_tail: content[chapters[chapters.indexOf(chapter) - 1]?.id]?.slice(-300) || '',
+      previous_chapter_tail: prevChapter ? content[prevChapter.id]?.slice(-300) || '' : '',
       paper_type: profile.paperType || '',
       user_identity: profile.identity || ''
     });
 
     let chapterText = '';
+    reply('progress', { chapterId: chapter.id, status: 'section', sectionTitle: chapterPathText });
     await streamChatCompletion(
       systemPrompt,
-      [{ role: 'user', content: `请撰写"${chapter.title}"章节，目标字数约${chapter.wordCountTarget}字。` }],
+      [{ role: 'user', content: `请围绕“${chapterPathText}”这一最低层级章节撰写正文内容，目标字数约${chapter.wordCountTarget ?? 0}字。不要重复生成其父章节的独立正文。` }],
       (chunk) => {
         chapterText += chunk;
         reply('chunk', { chapterId: chapter.id, content: chunk });
@@ -56,8 +181,11 @@ export async function startGeneration(
       async () => {
         content[chapter.id] = chapterText;
         await genRepo.updateContent(doc.id, content);
+        await genRepo.updateStatus(doc.id, 'GENERATING', null);
         reply('progress', { chapterId: chapter.id, status: 'done' });
-      }
+      },
+      undefined,
+      { nodeName: 'chapter_generation', projectId, userId }
     );
   }
 
@@ -67,10 +195,18 @@ export async function startGeneration(
   onDone();
 }
 
-export async function pauseGeneration(projectId: string) {
+export async function pauseGeneration(projectId: string, checkpointChapterId?: string | null) {
   const doc = await genRepo.findLatestByProjectId(projectId);
   if (!doc) throw new Error('文档不存在');
-  await genRepo.updateStatus(doc.id, 'PAUSED');
+  await genRepo.updateStatus(doc.id, 'PAUSED', checkpointChapterId ?? null);
+}
+
+export async function stopGeneration(projectId: string) {
+  const doc = await genRepo.findLatestByProjectId(projectId);
+  if (!doc) throw new Error('文档不存在');
+  await genRepo.updateStatus(doc.id, 'COMPLETED', null);
+  await projectRepo.updateStatus(projectId, 'EDITING');
+  return doc;
 }
 
 export async function getDocument(projectId: string) {

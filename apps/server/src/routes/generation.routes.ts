@@ -8,6 +8,7 @@ export async function generationRoutes(fastify: FastifyInstance) {
   fastify.post('/:projectId/generation/start', async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
     const user = (request as any).authUser as { id: string };
+    const body = (request.body || {}) as { restart?: boolean };
 
     reply.raw.setHeader('Content-Type', 'text/event-stream');
     reply.raw.setHeader('Cache-Control', 'no-cache');
@@ -24,7 +25,8 @@ export async function generationRoutes(fastify: FastifyInstance) {
         projectId,
         user.id,
         sendEvent,
-        () => reply.raw.end()
+        () => reply.raw.end(),
+        { restart: body.restart }
       );
     } catch (err: any) {
       sendEvent('error', { type: 'error', code: 'GENERATION_FAILED', message: err.message });
@@ -34,11 +36,22 @@ export async function generationRoutes(fastify: FastifyInstance) {
 
   fastify.post('/:projectId/generation/pause', async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
+    const body = (request.body || {}) as { checkpointChapterId?: string | null };
     try {
-      await genService.pauseGeneration(projectId);
+      await genService.pauseGeneration(projectId, body.checkpointChapterId);
       return reply.send(ok(null));
     } catch (err: any) {
       return reply.status(500).send(fail('PAUSE_FAILED', err.message));
+    }
+  });
+
+  fastify.post('/:projectId/generation/stop', async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    try {
+      const doc = await genService.stopGeneration(projectId);
+      return reply.send(ok(doc));
+    } catch (err: any) {
+      return reply.status(500).send(fail('STOP_FAILED', err.message));
     }
   });
 }

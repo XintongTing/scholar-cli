@@ -15,6 +15,14 @@ export const literatureApi = {
     http.delete(`/projects/${projectId}/literature/${litId}`),
   confirm: (projectId: string) =>
     http.post(`/projects/${projectId}/literature/confirm`),
+  aiSearch: (projectId: string, params?: {
+    totalCount?: number;
+    cnCount?: number;
+    enCount?: number;
+    years?: number;
+    keywords?: string;
+  }) =>
+    http.post(`/projects/${projectId}/literature/ai-search`, params ?? {}),
 };
 
 export const getLiterature = (projectId: string) =>

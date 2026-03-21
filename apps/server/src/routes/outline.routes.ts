@@ -11,18 +11,27 @@ const updateOutlineSchema = z.object({
 const addChapterSchema = z.object({
   title: z.string().min(1),
   description: z.string().optional(),
-  wordCountTarget: z.number().int().positive().optional()
+  wordCountTarget: z.number().int().positive().optional(),
+  level: z.number().int().min(1).max(3).optional(),
+  parentId: z.string().optional()
 });
 
 const updateChapterSchema = z.object({
   title: z.string().optional(),
   description: z.string().optional(),
   wordCountTarget: z.number().int().positive().optional(),
-  order: z.number().int().positive().optional()
+  order: z.number().int().positive().optional(),
+  level: z.number().int().min(1).max(3).optional(),
+  parentId: z.string().nullable().optional(),
+  collapsed: z.boolean().optional()
 });
 
 const chatSchema = z.object({
-  message: z.string().min(1)
+  message: z.string().min(1),
+  fileContents: z.array(z.object({
+    name: z.string(),
+    content: z.string()
+  })).optional()
 });
 
 export async function outlineRoutes(fastify: FastifyInstance) {
@@ -93,6 +102,7 @@ export async function outlineRoutes(fastify: FastifyInstance) {
         projectId,
         user.id,
         body.message,
+        body.fileContents,
         (chunk) => sendEvent('chunk', { type: 'text', content: chunk }),
         () => {
           sendEvent('done', { type: 'done' });

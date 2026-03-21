@@ -57,7 +57,8 @@ export async function chat(request: FastifyRequest, reply: FastifyReply) {
     projectId,
     user.id,
     message,
-    (chunk) => {
+    undefined,
+    (chunk: string) => {
       reply.raw.write(`event: chunk\ndata: ${JSON.stringify({ text: chunk })}\n\n`);
     },
     () => {

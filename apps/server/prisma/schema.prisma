@@ -70,13 +70,18 @@ model Outline {
 }
 
 model Chapter {
-  id              String  @id @default(cuid())
+  id              String    @id @default(cuid())
   outlineId       String
-  outline         Outline @relation(fields: [outlineId], references: [id], onDelete: Cascade)
+  outline         Outline   @relation(fields: [outlineId], references: [id], onDelete: Cascade)
   order           Int
+  level           Int       @default(1)
+  parentId        String?
+  parent          Chapter?  @relation("ChapterChildren", fields: [parentId], references: [id], onDelete: Cascade)
+  children        Chapter[] @relation("ChapterChildren")
   title           String
   description     String?
-  wordCountTarget Int     @default(1000)
+  wordCountTarget Int       @default(1000)
+  collapsed       Boolean   @default(false)
 }
 
 model Literature {
@@ -158,4 +163,22 @@ model PromptVersion {
   createdAt   DateTime   @default(now())
 
   @@unique([nodeId, version])
+}
+
+model AiCallLog {
+  id           String   @id @default(cuid())
+  nodeName     String
+  systemPrompt String
+  messages     Json
+  output       String
+  projectId    String?
+  userId       String?
+  durationMs   Int      @default(0)
+  inputTokens  Int      @default(0)
+  outputTokens Int      @default(0)
+  createdAt    DateTime @default(now())
+
+  @@index([nodeName])
+  @@index([createdAt])
+  @@index([projectId])
 }

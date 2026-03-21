@@ -52,4 +52,25 @@ export async function literatureRoutes(fastify: FastifyInstance) {
     const project = await litService.confirmLiterature(projectId);
     return reply.send(ok(project));
   });
+
+  fastify.post('/:projectId/literature/ai-search', async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    const body = (request.body || {}) as {
+      totalCount?: number;
+      cnCount?: number;
+      enCount?: number;
+      years?: number;
+      keywords?: string;
+    };
+    try {
+      const items = await litService.aiSearchLiterature(projectId, body);
+      return reply.status(201).send(ok(items));
+    } catch (err: any) {
+      fastify.log.error({ err, projectId }, '[ai-search] failed');
+      console.error('[ai-search] ERROR:', err?.constructor?.name, err?.message, err?.status ?? '');
+      console.error('[ai-search] STACK:', err?.stack);
+      console.error('[ai-search] BODY:', JSON.stringify(err?.error ?? err?.headers ?? {}));
+      return reply.status(500).send(fail('AI_SEARCH_FAILED', err.message));
+    }
+  });
 }

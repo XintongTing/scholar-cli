@@ -93,7 +93,7 @@ export function useSSEStream(handlers?: EventHandlers) {
               } else if (event === 'progress') {
                 sseCallbacks.onProgress?.(parsed as Record<string, unknown>);
               } else if (event === 'done') {
-                sseCallbacks.onDone?.(parsed as Record<string, unknown>);
+                await (sseCallbacks.onDone?.(parsed as Record<string, unknown>));
               } else if (event === 'error') {
                 sseCallbacks.onError?.(parsed.code ?? 'ERROR', parsed.message ?? '');
               }

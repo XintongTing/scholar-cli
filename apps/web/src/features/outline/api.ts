@@ -4,7 +4,7 @@ export const outlineApi = {
   get: (projectId: string) => http.get(`/projects/${projectId}/outline`),
   update: (projectId: string, data: { title?: string; abstract?: string }) =>
     http.patch(`/projects/${projectId}/outline`, data),
-  addChapter: (projectId: string, data: { title: string; description?: string; wordCountTarget?: number }) =>
+  addChapter: (projectId: string, data: { title: string; description?: string; wordCountTarget?: number; level?: number; parentId?: string }) =>
     http.post(`/projects/${projectId}/outline/chapters`, data),
   updateChapter: (projectId: string, chapterId: string, data: object) =>
     http.patch(`/projects/${projectId}/outline/chapters/${chapterId}`, data),

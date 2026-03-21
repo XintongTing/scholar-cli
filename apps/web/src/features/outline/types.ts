@@ -13,9 +13,12 @@ export interface Chapter {
   id: string;
   outlineId: string;
   order: number;
+  level: number;
+  parentId?: string | null;
   title: string;
   description: string | null;
   wordCountTarget: number;
+  collapsed?: boolean;
 }
 
 export interface ChatMessage {

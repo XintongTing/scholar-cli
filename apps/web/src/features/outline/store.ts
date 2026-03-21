@@ -3,9 +3,12 @@ import { create } from 'zustand';
 interface Chapter {
   id: string;
   order: number;
+  level: number;
+  parentId?: string | null;
   title: string;
   description?: string;
   wordCountTarget: number;
+  collapsed?: boolean;
 }
 
 interface Outline {

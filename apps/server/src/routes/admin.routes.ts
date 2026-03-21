@@ -65,4 +65,25 @@ export async function adminRoutes(fastify: FastifyInstance) {
       return reply.status(404).send(fail(err.code, err.message));
     }
   });
+
+  fastify.get('/ai-logs', async (request, reply) => {
+    const query = request.query as { nodeName?: string; projectId?: string; cursor?: string; limit?: string };
+    const logs = await adminService.listAiCallLogs({
+      nodeName: query.nodeName,
+      projectId: query.projectId,
+      cursor: query.cursor,
+      limit: query.limit ? parseInt(query.limit) : 50,
+    });
+    return reply.send(ok(logs));
+  });
+
+  fastify.get('/ai-logs/:logId', async (request, reply) => {
+    const { logId } = request.params as { logId: string };
+    try {
+      const log = await adminService.getAiCallLog(logId);
+      return reply.send(ok(log));
+    } catch (err: any) {
+      return reply.status(404).send(fail(err.code, err.message));
+    }
+  });
 }

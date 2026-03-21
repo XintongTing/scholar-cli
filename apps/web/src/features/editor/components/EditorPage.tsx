@@ -5,9 +5,11 @@ import StarterKit from '@tiptap/starter-kit';
 import Underline from '@tiptap/extension-underline';
 import Placeholder from '@tiptap/extension-placeholder';
 import { Table } from '@tiptap/extension-table';
-import { TableRow } from '@tiptap/extension-table';
-import { TableCell } from '@tiptap/extension-table';
-import { TableHeader } from '@tiptap/extension-table';
+import { TableRow } from '@tiptap/extension-table-row';
+import { TableCell } from '@tiptap/extension-table-cell';
+import { TableHeader } from '@tiptap/extension-table-header';
+import { TextStyle } from '@tiptap/extension-text-style';
+import FontFamily from '@tiptap/extension-font-family';
 import { Extension } from '@tiptap/core';
 import { Download } from 'lucide-react';
 import { http } from '../../../services/http';
@@ -16,18 +18,37 @@ import { Spinner } from '../../../shared/components/Spinner';
 import { EditorToolbar } from './EditorToolbar';
 import { Document, Packer, Paragraph, TextRun, HeadingLevel } from 'docx';
 import { saveAs } from 'file-saver';
+import { outlineApi } from '../../outline/api';
 
-// Strip markdown symbols from raw text before loading into editor
-function stripMarkdown(text: string): string {
-  return text
-    .replace(/^#{1,6}\s+/gm, '')      // headings
-    .replace(/\*\*(.+?)\*\*/g, '$1')  // bold
-    .replace(/\*(.+?)\*/g, '$1')      // italic
-    .replace(/`(.+?)`/g, '$1')        // inline code
-    .replace(/^[-*+]\s+/gm, '')       // unordered list markers
-    .replace(/^\d+\.\s+/gm, '')       // ordered list markers
-    .replace(/^>\s+/gm, '')           // blockquotes
-    .replace(/_{1,2}(.+?)_{1,2}/g, '$1'); // underscores
+// Convert markdown to Tiptap HTML with proper heading levels
+function markdownToHtml(text: string): string {
+  const lines = text.split('\n');
+  const htmlLines: string[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    const h3 = line.match(/^###\s+(.*)/);
+    const h2 = line.match(/^##\s+(.*)/);
+    const h1 = line.match(/^#\s+(.*)/);
+    if (h1) {
+      htmlLines.push(`<h1>${h1[1]}</h1>`);
+    } else if (h2) {
+      htmlLines.push(`<h2>${h2[1]}</h2>`);
+    } else if (h3) {
+      htmlLines.push(`<h3>${h3[1]}</h3>`);
+    } else if (line.trim() === '') {
+      // skip blank lines between paragraphs
+    } else {
+      // inline bold/italic
+      let content = line
+        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*(.+?)\*/g, '<em>$1</em>')
+        .replace(/`(.+?)`/g, '<code>$1</code>');
+      htmlLines.push(`<p>${content}</p>`);
+    }
+    i++;
+  }
+  return htmlLines.join('');
 }
 
 // Tiptap extension: first-line indent for paragraphs (2em, Chinese academic style)
@@ -48,6 +69,124 @@ const FirstLineIndent = Extension.create({
   },
 });
 
+// FontSize mark via TextStyle
+const FontSize = Extension.create({
+  name: 'fontSize',
+  addGlobalAttributes() {
+    return [
+      {
+        types: ['textStyle'],
+        attributes: {
+          fontSize: {
+            default: null,
+            parseHTML: (el) => el.style.fontSize || null,
+            renderHTML: (attrs) => {
+              if (!attrs.fontSize) return {};
+              return { style: `font-size: ${attrs.fontSize}` };
+            },
+          },
+        },
+      },
+    ];
+  },
+});
+
+interface Chapter {
+  id: string;
+  order: number;
+  title: string;
+  level?: number;
+  parentId?: string | null;
+}
+
+function sortChapters(chapters: Chapter[]) {
+  const byParent = new Map<string | null, Chapter[]>();
+
+  for (const chapter of chapters) {
+    const key = chapter.parentId ?? null;
+    const siblings = byParent.get(key) ?? [];
+    siblings.push(chapter);
+    byParent.set(key, siblings);
+  }
+
+  for (const siblings of byParent.values()) {
+    siblings.sort((a, b) => {
+      const orderDiff = (a.order ?? 0) - (b.order ?? 0);
+      if (orderDiff !== 0) return orderDiff;
+      return a.title.localeCompare(b.title, 'zh-CN');
+    });
+  }
+
+  const ordered: Chapter[] = [];
+  const visited = new Set<string>();
+
+  const walk = (parentId: string | null) => {
+    const siblings = byParent.get(parentId) ?? [];
+    for (const chapter of siblings) {
+      if (visited.has(chapter.id)) continue;
+      visited.add(chapter.id);
+      ordered.push(chapter);
+      walk(chapter.id);
+    }
+  };
+
+  walk(null);
+
+  for (const chapter of chapters) {
+    if (!visited.has(chapter.id)) {
+      visited.add(chapter.id);
+      ordered.push(chapter);
+      walk(chapter.id);
+    }
+  }
+
+  return ordered;
+}
+
+function buildChildrenMap(chapters: Chapter[]) {
+  const childrenMap = new Map<string | null, Chapter[]>();
+  for (const chapter of chapters) {
+    const key = chapter.parentId ?? null;
+    const children = childrenMap.get(key) ?? [];
+    children.push(chapter);
+    childrenMap.set(key, children);
+  }
+  return childrenMap;
+}
+
+function normalizeStringContent(value: unknown) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).filter(([, v]) => typeof v === 'string')
+  ) as Record<string, string>;
+}
+
+function renderMarkdownTree(
+  parentId: string | null,
+  childrenMap: Map<string | null, Chapter[]>,
+  contentMap: Record<string, string>
+): string {
+  const chapters = childrenMap.get(parentId) ?? [];
+
+  return chapters.map((chapter) => {
+    const childMarkdown = renderMarkdownTree(chapter.id, childrenMap, contentMap);
+    const body = (contentMap[chapter.id] || '').trim();
+    const hasVisibleContent = Boolean(body || childMarkdown);
+    if (!hasVisibleContent) return '';
+
+    const prefix = chapter.level === 1 ? '# ' : chapter.level === 2 ? '## ' : '### ';
+    return [
+      `${prefix}${chapter.title}`,
+      body,
+      childMarkdown,
+    ].filter(Boolean).join('\n\n');
+  }).filter(Boolean).join('\n\n');
+}
+
+function isTiptapJson(value: unknown): value is { type: string; content?: unknown[] } {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value) && 'type' in value);
+}
+
 export function EditorPage() {
   const { id: projectId } = useParams<{ id: string }>();
   const [loading, setLoading] = useState(true);
@@ -59,6 +198,9 @@ export function EditorPage() {
     extensions: [
       StarterKit,
       Underline,
+      TextStyle,
+      FontFamily,
+      FontSize,
       Placeholder.configure({ placeholder: '论文内容将在此处显示...' }),
       Table.configure({ resizable: true }),
       TableRow,
@@ -81,17 +223,30 @@ export function EditorPage() {
 
   useEffect(() => {
     if (!projectId || !editor) return;
-    http.get(`/projects/${projectId}/document`).then((res) => {
-      const doc = res.data.data;
-      if (doc?.content) {
-        const raw = typeof doc.content === 'string'
-          ? doc.content
-          : Object.values(doc.content as Record<string, string>).join('\n\n');
-        const clean = stripMarkdown(raw);
-        editor.commands.setContent(
-          `<p>${clean.replace(/\n{2,}/g, '</p><p>').replace(/\n/g, '<br/>')}</p>`
-        );
+    Promise.all([
+      http.get(`/projects/${projectId}/document`),
+      outlineApi.get(projectId),
+    ]).then(([docRes, outlineRes]) => {
+      const doc = docRes.data.data;
+      if (!doc?.content) return;
+
+      if (isTiptapJson(doc.content)) {
+        editor.commands.setContent(doc.content);
+        return;
       }
+
+      if (typeof doc.content === 'string') {
+        const html = markdownToHtml(doc.content);
+        editor.commands.setContent(html || '<p></p>');
+        return;
+      }
+
+      const chapters = sortChapters(outlineRes.data.data?.chapters || []);
+      const childrenMap = buildChildrenMap(chapters);
+      const contentMap = normalizeStringContent(doc.content);
+      const markdown = renderMarkdownTree(null, childrenMap, contentMap);
+      const html = markdownToHtml(markdown);
+      editor.commands.setContent(html || '<p></p>');
     }).finally(() => setLoading(false));
   }, [projectId, editor]);
 
@@ -171,6 +326,9 @@ export function EditorPage() {
           .paper-editor table { border-collapse: collapse; width: 100%; margin: 1em 0; }
           .paper-editor td, .paper-editor th { border: 1px solid #d1d5db; padding: 6px 10px; }
           .paper-editor th { background: #f9fafb; font-weight: 600; }
+          .paper-editor h1 { font-size: 1.75em; font-weight: 700; text-align: center; margin: 1.2em 0 0.6em; }
+          .paper-editor h2 { font-size: 1.35em; font-weight: 600; margin: 1em 0 0.5em; }
+          .paper-editor h3 { font-size: 1.1em; font-weight: 600; margin: 0.8em 0 0.4em; }
         `}</style>
         <div className="max-w-4xl mx-auto my-8 bg-white shadow-sm min-h-[calc(100vh-200px)]">
           <EditorContent editor={editor} />

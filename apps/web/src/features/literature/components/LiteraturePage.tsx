@@ -1,7 +1,7 @@
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useDropzone } from 'react-dropzone';
-import { Upload, Trash2, CheckCircle, FileText, ClipboardPaste, X } from 'lucide-react';
+import { Upload, Trash2, CheckCircle, FileText, ClipboardPaste, X, Search } from 'lucide-react';
 import { literatureApi } from '../api';
 import { Button } from '../../../shared/components/Button';
 import { Spinner } from '../../../shared/components/Spinner';
@@ -32,6 +32,15 @@ export function LiteraturePage() {
   const [pasteText, setPasteText] = useState('');
   const [pasteTitle, setPasteTitle] = useState('');
   const [submittingPaste, setSubmittingPaste] = useState(false);
+  const [aiSearching, setAiSearching] = useState(false);
+  const [showSearchParams, setShowSearchParams] = useState(false);
+  const [searchParams, setSearchParams] = useState({
+    totalCount: 20,
+    cnCount: 15,
+    enCount: 5,
+    years: 5,
+    keywords: '',
+  });
 
   useEffect(() => {
     if (!projectId) return;
@@ -85,6 +94,23 @@ export function LiteraturePage() {
     setItems((prev) => prev.filter((l) => l.id !== litId));
   };
 
+  const handleAiSearch = async () => {
+    if (!projectId) return;
+    setAiSearching(true);
+    try {
+      const res = await literatureApi.aiSearch(projectId, searchParams);
+      const newItems: Literature[] = res.data.data || [];
+      setItems((prev) => {
+        const existingIds = new Set(prev.map((l) => l.id));
+        return [...prev, ...newItems.filter((l) => !existingIds.has(l.id))];
+      });
+    } catch (err) {
+      console.error('AI search failed:', err);
+    } finally {
+      setAiSearching(false);
+    }
+  };
+
   const handleConfirm = async () => {
     if (!projectId) return;
     await literatureApi.confirm(projectId);
@@ -98,6 +124,78 @@ export function LiteraturePage() {
       <div className="mb-8">
         <h1 className="text-2xl font-semibold text-text-primary">文献管理</h1>
         <p className="mt-1 text-sm text-text-secondary">上传参考文献，AI 将自动提取元数据</p>
+      </div>
+
+      {/* AI Search */}
+      <div className="mb-4 border border-border rounded-lg overflow-hidden">
+        <div className="p-4 bg-bg-subtle flex items-center justify-between">
+          <div>
+            <p className="text-sm font-medium text-text-primary">AI 智能搜索</p>
+            <p className="text-xs text-text-secondary mt-0.5">根据你的论文主题，AI 自动推荐相关参考文献</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowSearchParams((v) => !v)}
+              className="text-xs text-primary hover:underline"
+            >
+              {showSearchParams ? '收起设置' : '搜索设置'}
+            </button>
+            <Button variant="secondary" size="sm" onClick={handleAiSearch} disabled={aiSearching}>
+              {aiSearching ? <Spinner size="sm" /> : <Search size={14} strokeWidth={1.5} className="mr-1.5" />}
+              {aiSearching ? 'AI 搜索中...' : 'AI 搜索文献'}
+            </Button>
+          </div>
+        </div>
+        {showSearchParams && (
+          <div className="px-4 pb-4 pt-2 bg-white border-t border-border grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs text-text-secondary mb-1">总篇数</label>
+              <input
+                type="number" min={5} max={50}
+                className="w-full px-2 py-1.5 text-sm border border-border rounded focus:outline-none focus:ring-1 focus:ring-primary"
+                value={searchParams.totalCount}
+                onChange={(e) => setSearchParams((p) => ({ ...p, totalCount: Number(e.target.value) }))}
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-text-secondary mb-1">近几年（发表时间）</label>
+              <input
+                type="number" min={1} max={20}
+                className="w-full px-2 py-1.5 text-sm border border-border rounded focus:outline-none focus:ring-1 focus:ring-primary"
+                value={searchParams.years}
+                onChange={(e) => setSearchParams((p) => ({ ...p, years: Number(e.target.value) }))}
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-text-secondary mb-1">中文篇数</label>
+              <input
+                type="number" min={0} max={50}
+                className="w-full px-2 py-1.5 text-sm border border-border rounded focus:outline-none focus:ring-1 focus:ring-primary"
+                value={searchParams.cnCount}
+                onChange={(e) => setSearchParams((p) => ({ ...p, cnCount: Number(e.target.value) }))}
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-text-secondary mb-1">英文篇数</label>
+              <input
+                type="number" min={0} max={50}
+                className="w-full px-2 py-1.5 text-sm border border-border rounded focus:outline-none focus:ring-1 focus:ring-primary"
+                value={searchParams.enCount}
+                onChange={(e) => setSearchParams((p) => ({ ...p, enCount: Number(e.target.value) }))}
+              />
+            </div>
+            <div className="col-span-2">
+              <label className="block text-xs text-text-secondary mb-1">关键词（留空则从大纲自动提取）</label>
+              <input
+                type="text"
+                className="w-full px-2 py-1.5 text-sm border border-border rounded focus:outline-none focus:ring-1 focus:ring-primary"
+                placeholder="如：机器学习, 自然语言处理"
+                value={searchParams.keywords}
+                onChange={(e) => setSearchParams((p) => ({ ...p, keywords: e.target.value }))}
+              />
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Upload Zone */}

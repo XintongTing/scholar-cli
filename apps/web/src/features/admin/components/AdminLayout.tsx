@@ -31,6 +31,19 @@ export function AdminLayout() {
           >
             提示词管理
           </NavLink>
+          <NavLink
+            to="/admin/ai-logs"
+            className={({ isActive }) =>
+              cn(
+                'flex items-center gap-3 px-4 h-10 text-sm transition-colors',
+                isActive
+                  ? 'bg-primary-subtle text-primary font-medium'
+                  : 'text-text-secondary hover:bg-bg-muted hover:text-text-primary'
+              )
+            }
+          >
+            AI 调用日志
+          </NavLink>
         </nav>
 
         <main className="flex-1 overflow-y-auto">

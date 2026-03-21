@@ -48,3 +48,9 @@ minio_data/
 # Misc
 *.tsbuildinfo
 .cache/
+
+# claude
+.claude/
+
+# doc
+docs/
