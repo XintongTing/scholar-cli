@@ -16,6 +16,11 @@ const rollbackSchema = z.object({
   targetVersion: z.number().int().positive()
 });
 
+const updateAiConfigSchema = z.object({
+  apiKey: z.string().optional().nullable(),
+  baseUrl: z.string().optional().nullable(),
+});
+
 export async function adminRoutes(fastify: FastifyInstance) {
   fastify.addHook('preHandler', fastify.authenticateAdmin);
 
@@ -64,6 +69,17 @@ export async function adminRoutes(fastify: FastifyInstance) {
     } catch (err: any) {
       return reply.status(404).send(fail(err.code, err.message));
     }
+  });
+
+  fastify.get('/ai-config', async (_request, reply) => {
+    const data = await adminService.getAiConfig();
+    return reply.send(ok(data));
+  });
+
+  fastify.patch('/ai-config', async (request, reply) => {
+    const body = updateAiConfigSchema.parse(request.body);
+    const data = await adminService.updateAiConfig(body);
+    return reply.send(ok(data));
   });
 
   fastify.get('/ai-logs', async (request, reply) => {

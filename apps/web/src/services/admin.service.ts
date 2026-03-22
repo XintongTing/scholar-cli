@@ -64,3 +64,21 @@ export async function getAiCallLog(logId: string) {
   const res = await http.get<ApiResponse<AiCallLogDetail>>(`/admin/ai-logs/${logId}`);
   return res.data.data!;
 }
+
+export interface AiConfig {
+  apiKeyMasked: string;
+  hasApiKey: boolean;
+  apiKeySource: 'database' | 'env' | 'unset';
+  baseUrl: string;
+  baseUrlSource: 'database' | 'env' | 'unset';
+}
+
+export async function getAiConfig() {
+  const res = await http.get<ApiResponse<AiConfig>>('/admin/ai-config');
+  return res.data.data!;
+}
+
+export async function updateAiConfig(payload: { apiKey?: string | null; baseUrl?: string | null }) {
+  const res = await http.patch<ApiResponse<AiConfig>>('/admin/ai-config', payload);
+  return res.data.data!;
+}

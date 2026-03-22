@@ -29,7 +29,20 @@ export function AdminLayout() {
               )
             }
           >
-            提示词管理
+            提示词配置
+          </NavLink>
+          <NavLink
+            to="/admin/ai-config"
+            className={({ isActive }) =>
+              cn(
+                'flex items-center gap-3 px-4 h-10 text-sm transition-colors',
+                isActive
+                  ? 'bg-primary-subtle text-primary font-medium'
+                  : 'text-text-secondary hover:bg-bg-muted hover:text-text-primary'
+              )
+            }
+          >
+            AI 配置
           </NavLink>
           <NavLink
             to="/admin/ai-logs"

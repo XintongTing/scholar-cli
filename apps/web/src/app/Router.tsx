@@ -16,6 +16,7 @@ import { AdminLayout } from '../features/admin/components/AdminLayout';
 import { PromptNodeListPage } from '../features/admin/components/PromptNodeListPage';
 import { PromptEditorPage } from '../features/admin/components/PromptEditorPage';
 import { AiCallLogPage } from '../features/admin/components/AiCallLogPage';
+import { AiConfigPage } from '../features/admin/components/AiConfigPage';
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated());
@@ -55,6 +56,7 @@ export const router = createBrowserRouter([
       { index: true, element: <Navigate to="/admin/prompts" replace /> },
       { path: 'prompts', element: <PromptNodeListPage /> },
       { path: 'prompts/:nodeId', element: <PromptEditorPage /> },
+      { path: 'ai-config', element: <AiConfigPage /> },
       { path: 'ai-logs', element: <AiCallLogPage /> },
     ],
   },

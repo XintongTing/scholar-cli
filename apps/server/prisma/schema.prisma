@@ -182,3 +182,10 @@ model AiCallLog {
   @@index([createdAt])
   @@index([projectId])
 }
+
+model AppConfig {
+  key       String   @id
+  value     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
