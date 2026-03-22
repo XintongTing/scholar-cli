@@ -47,6 +47,42 @@ export async function literatureRoutes(fastify: FastifyInstance) {
     }
   });
 
+  const handleSelectionUpdate = async (request: any, reply: any) => {
+    const { projectId } = request.params as { projectId: string };
+    const { literatureIds, confirmed } = (request.body || {}) as {
+      literatureIds?: string[];
+      confirmed?: boolean;
+    };
+
+    if (!Array.isArray(literatureIds) || literatureIds.length === 0) {
+      return reply.status(400).send(fail('INVALID_IDS', 'Literature ids are required'));
+    }
+
+    if (typeof confirmed !== 'boolean') {
+      return reply.status(400).send(fail('INVALID_CONFIRMED', 'Confirmed flag is required'));
+    }
+
+    try {
+      const items = await litService.updateLiteratureSelection(projectId, literatureIds, confirmed);
+      return reply.send(ok(items));
+    } catch (err: any) {
+      return reply.status(404).send(fail(err.code || 'UPDATE_SELECTION_FAILED', err.message));
+    }
+  };
+
+  fastify.patch('/:projectId/literature/selection', handleSelectionUpdate);
+  fastify.post('/:projectId/literature/selection', handleSelectionUpdate);
+
+  fastify.post('/:projectId/literature/:litId/delete', async (request, reply) => {
+    const { projectId, litId } = request.params as { projectId: string; litId: string };
+    try {
+      await litService.deleteLiterature(projectId, litId);
+      return reply.send(ok(null));
+    } catch (err: any) {
+      return reply.status(404).send(fail(err.code || 'DELETE_FAILED', err.message));
+    }
+  });
+
   fastify.post('/:projectId/literature/confirm', async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
     const project = await litService.confirmLiterature(projectId);

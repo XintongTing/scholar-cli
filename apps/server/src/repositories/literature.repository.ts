@@ -23,9 +23,16 @@ export async function deleteById(id: string) {
   return prisma.literature.delete({ where: { id } });
 }
 
-export async function confirmAll(projectId: string) {
+export async function updateConfirmedByIds(
+  projectId: string,
+  literatureIds: string[],
+  confirmed: boolean
+) {
   return prisma.literature.updateMany({
-    where: { projectId },
-    data: { confirmed: true }
+    where: {
+      projectId,
+      id: { in: literatureIds },
+    },
+    data: { confirmed }
   });
 }

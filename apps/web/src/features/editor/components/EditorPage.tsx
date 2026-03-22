@@ -12,46 +12,38 @@ import { TextStyle } from '@tiptap/extension-text-style';
 import FontFamily from '@tiptap/extension-font-family';
 import { Extension } from '@tiptap/core';
 import { Download } from 'lucide-react';
+import { Document, Packer, Paragraph, TextRun, HeadingLevel } from 'docx';
+import { saveAs } from 'file-saver';
 import { http } from '../../../services/http';
 import { Button } from '../../../shared/components/Button';
 import { Spinner } from '../../../shared/components/Spinner';
 import { EditorToolbar } from './EditorToolbar';
-import { Document, Packer, Paragraph, TextRun, HeadingLevel } from 'docx';
-import { saveAs } from 'file-saver';
 import { outlineApi } from '../../outline/api';
 
-// Convert markdown to Tiptap HTML with proper heading levels
 function markdownToHtml(text: string): string {
   const lines = text.split('\n');
   const htmlLines: string[] = [];
-  let i = 0;
-  while (i < lines.length) {
-    const line = lines[i];
+
+  for (const line of lines) {
     const h3 = line.match(/^###\s+(.*)/);
     const h2 = line.match(/^##\s+(.*)/);
     const h1 = line.match(/^#\s+(.*)/);
-    if (h1) {
-      htmlLines.push(`<h1>${h1[1]}</h1>`);
-    } else if (h2) {
-      htmlLines.push(`<h2>${h2[1]}</h2>`);
-    } else if (h3) {
-      htmlLines.push(`<h3>${h3[1]}</h3>`);
-    } else if (line.trim() === '') {
-      // skip blank lines between paragraphs
-    } else {
-      // inline bold/italic
-      let content = line
+
+    if (h1) htmlLines.push(`<h1>${h1[1]}</h1>`);
+    else if (h2) htmlLines.push(`<h2>${h2[1]}</h2>`);
+    else if (h3) htmlLines.push(`<h3>${h3[1]}</h3>`);
+    else if (line.trim() !== '') {
+      const content = line
         .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
         .replace(/\*(.+?)\*/g, '<em>$1</em>')
         .replace(/`(.+?)`/g, '<code>$1</code>');
       htmlLines.push(`<p>${content}</p>`);
     }
-    i++;
   }
+
   return htmlLines.join('');
 }
 
-// Tiptap extension: first-line indent for paragraphs (2em, Chinese academic style)
 const FirstLineIndent = Extension.create({
   name: 'firstLineIndent',
   addGlobalAttributes() {
@@ -69,7 +61,6 @@ const FirstLineIndent = Extension.create({
   },
 });
 
-// FontSize mark via TextStyle
 const FontSize = Extension.create({
   name: 'fontSize',
   addGlobalAttributes() {
@@ -97,6 +88,14 @@ interface Chapter {
   title: string;
   level?: number;
   parentId?: string | null;
+}
+
+interface ProjectDetail {
+  title?: string;
+  userProfile?: Record<string, unknown>;
+  outline?: {
+    title?: string;
+  } | null;
 }
 
 function sortChapters(chapters: Chapter[]) {
@@ -168,23 +167,26 @@ function renderMarkdownTree(
 ): string {
   const chapters = childrenMap.get(parentId) ?? [];
 
-  return chapters.map((chapter) => {
-    const childMarkdown = renderMarkdownTree(chapter.id, childrenMap, contentMap);
-    const body = (contentMap[chapter.id] || '').trim();
-    const hasVisibleContent = Boolean(body || childMarkdown);
-    if (!hasVisibleContent) return '';
+  return chapters
+    .map((chapter) => {
+      const childMarkdown = renderMarkdownTree(chapter.id, childrenMap, contentMap);
+      const body = (contentMap[chapter.id] || '').trim();
+      const hasVisibleContent = Boolean(body || childMarkdown);
+      if (!hasVisibleContent) return '';
 
-    const prefix = chapter.level === 1 ? '# ' : chapter.level === 2 ? '## ' : '### ';
-    return [
-      `${prefix}${chapter.title}`,
-      body,
-      childMarkdown,
-    ].filter(Boolean).join('\n\n');
-  }).filter(Boolean).join('\n\n');
+      const prefix = chapter.level === 1 ? '# ' : chapter.level === 2 ? '## ' : '### ';
+      return [`${prefix}${chapter.title}`, body, childMarkdown].filter(Boolean).join('\n\n');
+    })
+    .filter(Boolean)
+    .join('\n\n');
 }
 
 function isTiptapJson(value: unknown): value is { type: string; content?: unknown[] } {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value) && 'type' in value);
+}
+
+function sanitizeFilenamePart(value: string) {
+  return value.replace(/[<>:"/\\|?*\u0000-\u001F]/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
 export function EditorPage() {
@@ -192,6 +194,7 @@ export function EditorPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
+  const [downloadFileName, setDownloadFileName] = useState('论文.docx');
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const editor = useTiptapEditor({
@@ -223,32 +226,50 @@ export function EditorPage() {
 
   useEffect(() => {
     if (!projectId || !editor) return;
+
     Promise.all([
       http.get(`/projects/${projectId}/document`),
       outlineApi.get(projectId),
-    ]).then(([docRes, outlineRes]) => {
-      const doc = docRes.data.data;
-      if (!doc?.content) return;
+    ])
+      .then(([docRes, outlineRes]) => {
+        const doc = docRes.data.data;
+        if (!doc?.content) return;
 
-      if (isTiptapJson(doc.content)) {
-        editor.commands.setContent(doc.content);
-        return;
-      }
+        if (isTiptapJson(doc.content)) {
+          editor.commands.setContent(doc.content);
+          return;
+        }
 
-      if (typeof doc.content === 'string') {
-        const html = markdownToHtml(doc.content);
+        if (typeof doc.content === 'string') {
+          const html = markdownToHtml(doc.content);
+          editor.commands.setContent(html || '<p></p>');
+          return;
+        }
+
+        const chapters = sortChapters(outlineRes.data.data?.chapters || []);
+        const childrenMap = buildChildrenMap(chapters);
+        const contentMap = normalizeStringContent(doc.content);
+        const markdown = renderMarkdownTree(null, childrenMap, contentMap);
+        const html = markdownToHtml(markdown);
         editor.commands.setContent(html || '<p></p>');
-        return;
-      }
-
-      const chapters = sortChapters(outlineRes.data.data?.chapters || []);
-      const childrenMap = buildChildrenMap(chapters);
-      const contentMap = normalizeStringContent(doc.content);
-      const markdown = renderMarkdownTree(null, childrenMap, contentMap);
-      const html = markdownToHtml(markdown);
-      editor.commands.setContent(html || '<p></p>');
-    }).finally(() => setLoading(false));
+      })
+      .finally(() => setLoading(false));
   }, [projectId, editor]);
+
+  useEffect(() => {
+    if (!projectId) return;
+
+    http.get(`/projects/${projectId}`)
+      .then((res) => {
+        const project = res.data.data as ProjectDetail;
+        const paperType = sanitizeFilenamePart(String(project.userProfile?.paperType || '论文'));
+        const title = sanitizeFilenamePart(String(project.outline?.title || project.title || '未命名'));
+        setDownloadFileName(`${paperType}-${title}.docx`);
+      })
+      .catch(() => {
+        setDownloadFileName('论文.docx');
+      });
+  }, [projectId]);
 
   const handleSave = async (content: object) => {
     if (!projectId) return;
@@ -269,23 +290,25 @@ export function EditorPage() {
     const traverse = (node: { type?: string; content?: typeof node[]; attrs?: Record<string, unknown>; marks?: { type: string }[]; text?: string }) => {
       if (node.type === 'heading') {
         const text = node.content?.map((c) => (c as { text?: string }).text || '').join('') || '';
-        const lvl = (node.attrs?.level as number) || 1;
+        const level = (node.attrs?.level as number) || 1;
         paragraphs.push(new Paragraph({
           text,
-          heading: lvl === 1 ? HeadingLevel.HEADING_1 : lvl === 2 ? HeadingLevel.HEADING_2 : HeadingLevel.HEADING_3,
+          heading: level === 1 ? HeadingLevel.HEADING_1 : level === 2 ? HeadingLevel.HEADING_2 : HeadingLevel.HEADING_3,
         }));
       } else if (node.type === 'paragraph') {
         const runs: TextRun[] = (node.content || []).map((c) => {
-          const cn = c as { type?: string; text?: string; marks?: { type: string }[] };
+          const current = c as { text?: string; marks?: { type: string }[] };
           return new TextRun({
-            text: cn.text || '',
-            bold: cn.marks?.some((m) => m.type === 'bold'),
-            italics: cn.marks?.some((m) => m.type === 'italic'),
-            underline: cn.marks?.some((m) => m.type === 'underline') ? {} : undefined,
+            text: current.text || '',
+            bold: current.marks?.some((mark) => mark.type === 'bold'),
+            italics: current.marks?.some((mark) => mark.type === 'italic'),
+            underline: current.marks?.some((mark) => mark.type === 'underline') ? {} : undefined,
           });
         });
+
         paragraphs.push(new Paragraph({ children: runs, indent: { firstLine: 720 } }));
       }
+
       node.content?.forEach((child) => traverse(child));
     };
 
@@ -293,14 +316,19 @@ export function EditorPage() {
 
     const doc = new Document({ sections: [{ children: paragraphs }] });
     const blob = await Packer.toBlob(doc);
-    saveAs(blob, '论文.docx');
+    saveAs(blob, downloadFileName);
   };
 
-  if (loading) return <div className="flex items-center justify-center h-full"><Spinner size="lg" /></div>;
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <Spinner size="lg" />
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col h-full">
-      {/* Toolbar */}
       <div className="border-b border-border bg-white shrink-0">
         <div className="flex items-center justify-between px-4 py-1">
           <EditorToolbar editor={editor} />
@@ -319,7 +347,6 @@ export function EditorPage() {
         </div>
       </div>
 
-      {/* Editor canvas */}
       <div className="flex-1 overflow-y-auto bg-bg-subtle">
         <style>{`
           .paper-editor p.indent-paragraph { text-indent: 2em; }

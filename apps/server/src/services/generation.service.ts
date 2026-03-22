@@ -21,6 +21,15 @@ interface StartGenerationOptions {
   restart?: boolean;
 }
 
+const CITATION_INSTRUCTIONS = `
+
+参考文献编号规则：
+1. 正文中的引用编号必须按最终正文里首次出现的顺序从[1]开始递增。
+2. 不要直接照搬上方参考文献列表里的原始编号。
+3. 同一篇文献再次被引用时，必须复用它第一次出现时的编号。
+4. 只有实际在正文中引用到的文献才需要编号。
+`;
+
 function sortChaptersForGeneration(chapters: OutlineChapter[]) {
   const byParent = new Map<string | null, OutlineChapter[]>();
 
@@ -97,6 +106,42 @@ function readSavedContent(raw: unknown) {
   return Object.fromEntries(entries) as Record<string, string>;
 }
 
+function findFirstIncompleteChapterIndex(
+  chapters: OutlineChapter[],
+  content: Record<string, string>
+) {
+  return chapters.findIndex((chapter) => !content[chapter.id]?.trim());
+}
+
+function normalizeCitationOrder(
+  chapters: OutlineChapter[],
+  content: Record<string, string>
+) {
+  const orderedLeafChapters = getLeafChapters(chapters);
+  const citationMap = new Map<number, number>();
+  let nextCitation = 1;
+  const normalizedContent: Record<string, string> = { ...content };
+
+  for (const chapter of orderedLeafChapters) {
+    const text = normalizedContent[chapter.id];
+    if (!text) continue;
+
+    normalizedContent[chapter.id] = text.replace(/\[(\s*\d+(?:\s*[-,，]\s*\d+)*)\]/g, (_full, body: string) => {
+      const rewritten = body.replace(/\d+/g, (value) => {
+        const sourceNumber = Number(value);
+        if (!citationMap.has(sourceNumber)) {
+          citationMap.set(sourceNumber, nextCitation++);
+        }
+        return String(citationMap.get(sourceNumber));
+      });
+
+      return `[${rewritten.replace(/，/g, ', ')}]`;
+    });
+  }
+
+  return normalizedContent;
+}
+
 export async function startGeneration(
   projectId: string,
   userId: string,
@@ -111,7 +156,11 @@ export async function startGeneration(
   const chapterMap = new Map(allChapters.map((chapter) => [chapter.id, chapter]));
   const chapters = getLeafChapters(allChapters);
   const latestDoc = await genRepo.findLatestByProjectId(projectId);
-  const canResume = latestDoc?.status === 'PAUSED' && !options.restart;
+  const latestContent = latestDoc ? readSavedContent(latestDoc.content) : {};
+  const latestFirstIncompleteIndex = latestDoc
+    ? findFirstIncompleteChapterIndex(chapters, latestContent)
+    : -1;
+  const canResume = Boolean(latestDoc && !options.restart && latestFirstIncompleteIndex >= 0);
   const doc = canResume
     ? latestDoc
     : await genRepo.create(projectId, options.restart ? {} : undefined);
@@ -122,17 +171,15 @@ export async function startGeneration(
     await genRepo.updateStatus(doc.id, 'GENERATING', null);
   }
 
-  const content: Record<string, string> = canResume
-    ? readSavedContent(doc.content)
-    : {};
+  const content: Record<string, string> = canResume ? latestContent : {};
 
   const checkpointChapterId = canResume ? doc.checkpointChapterId : null;
   const checkpointIndex = checkpointChapterId
     ? chapters.findIndex((chapter) => chapter.id === checkpointChapterId)
     : -1;
-  const firstIncompleteIndex = chapters.findIndex((chapter) => !content[chapter.id]?.trim());
+  const firstIncompleteIndex = findFirstIncompleteChapterIndex(chapters, content);
 
-  let startIndex = checkpointIndex >= 0 ? checkpointIndex : firstIncompleteIndex;
+  const startIndex = checkpointIndex >= 0 ? checkpointIndex : firstIncompleteIndex;
   if (startIndex < 0) {
     await genRepo.updateStatus(doc.id, 'COMPLETED');
     await projectRepo.updateStatus(projectId, 'EDITING');
@@ -167,26 +214,53 @@ export async function startGeneration(
       previous_chapter_tail: prevChapter ? content[prevChapter.id]?.slice(-300) || '' : '',
       paper_type: profile.paperType || '',
       user_identity: profile.identity || ''
-    });
+    }) + CITATION_INSTRUCTIONS;
 
     let chapterText = '';
     reply('progress', { chapterId: chapter.id, status: 'section', sectionTitle: chapterPathText });
     await streamChatCompletion(
       systemPrompt,
-      [{ role: 'user', content: `请围绕“${chapterPathText}”这一最低层级章节撰写正文内容，目标字数约${chapter.wordCountTarget ?? 0}字。不要重复生成其父章节的独立正文。` }],
+      [{
+        role: 'user',
+        content: `请围绕“${chapterPathText}”这个最低层级章节撰写正文内容，目标字数约 ${chapter.wordCountTarget ?? 0} 字。不要重复生成其父章节的独立正文。`
+      }],
       (chunk) => {
         chapterText += chunk;
         reply('chunk', { chapterId: chapter.id, content: chunk });
       },
       async () => {
         content[chapter.id] = chapterText;
-        await genRepo.updateContent(doc.id, content);
-        await genRepo.updateStatus(doc.id, 'GENERATING', null);
+        const normalizedContent = normalizeCitationOrder(allChapters, content);
+        Object.assign(content, normalizedContent);
+        await genRepo.updateContent(doc.id, normalizedContent);
+
+        const latest = await genRepo.findLatestByProjectId(projectId);
+        if (latest?.id === doc.id && latest.status === 'GENERATING') {
+          await genRepo.updateStatus(doc.id, 'GENERATING', null);
+        }
         reply('progress', { chapterId: chapter.id, status: 'done' });
       },
       undefined,
       { nodeName: 'chapter_generation', projectId, userId }
     );
+
+    const latest = await genRepo.findLatestByProjectId(projectId);
+    if (latest?.id !== doc.id) {
+      onDone();
+      return;
+    }
+
+    if (latest.status === 'PAUSED') {
+      reply('paused', { chapterId: latest.checkpointChapterId ?? chapter.id });
+      onDone();
+      return;
+    }
+
+    if (latest.status === 'COMPLETED') {
+      reply('done', { documentId: doc.id });
+      onDone();
+      return;
+    }
   }
 
   await genRepo.updateStatus(doc.id, 'COMPLETED');
@@ -216,6 +290,12 @@ export async function getDocument(projectId: string) {
 export async function saveDocument(projectId: string, content: Record<string, unknown>) {
   const doc = await genRepo.findLatestByProjectId(projectId);
   if (!doc) throw new Error('文档不存在');
-  await genRepo.updateContent(doc.id, content);
+
+  const project = await projectRepo.findById(projectId);
+  const chapters = project?.outline ? sortChaptersForGeneration(project.outline.chapters) : [];
+  const savedContent = readSavedContent(content);
+  const normalizedContent = normalizeCitationOrder(chapters, savedContent);
+
+  await genRepo.updateContent(doc.id, normalizedContent);
   return doc;
 }

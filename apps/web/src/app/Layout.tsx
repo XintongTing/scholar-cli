@@ -1,28 +1,30 @@
-import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
+import { Outlet, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { PenLine, BookOpen, History, LogOut, Settings, ChevronLeft } from 'lucide-react';
 import { useAuthStore } from '../features/auth/store';
 import { cn } from '../shared/utils/cn';
 
 const STEPS = [
-  { key: 'outline',     label: '大纲',   path: 'outline' },
-  { key: 'literature',  label: '文献',   path: 'literature' },
-  { key: 'materials',   label: '素材',   path: 'materials' },
-  { key: 'generation',  label: '生成',   path: 'generation' },
-  { key: 'editor',      label: '编辑',   path: 'editor' },
+  { key: 'start', label: '开始', path: 'start' },
+  { key: 'outline', label: '大纲', path: 'outline' },
+  { key: 'literature', label: '文献', path: 'literature' },
+  { key: 'materials', label: '素材', path: 'materials' },
+  { key: 'generation', label: '生成', path: 'generation' },
+  { key: 'editor', label: '编辑', path: 'editor' },
 ];
 
 const STEP_PREV: Record<string, string> = {
+  outline: 'start',
   literature: 'outline',
-  materials:  'literature',
+  materials: 'literature',
   generation: 'materials',
-  editor:     'generation',
+  editor: 'generation',
 };
 
 function useProjectStep() {
   const location = useLocation();
-  const m = location.pathname.match(/\/projects\/([^/]+)\/([^/]+)/);
-  if (!m) return { projectId: null, step: null };
-  return { projectId: m[1], step: m[2] };
+  const match = location.pathname.match(/\/projects\/([^/]+)\/([^/]+)/);
+  if (!match) return { projectId: null, step: null };
+  return { projectId: match[1], step: match[2] };
 }
 
 export function Layout() {
@@ -43,29 +45,28 @@ export function Layout() {
     else navigate('/projects');
   };
 
-  const showSteps = !!step && STEPS.some((s) => s.key === step);
+  const currentStepIndex = STEPS.findIndex((item) => item.key === step);
+  const showSteps = currentStepIndex >= 0;
+  const canGoBack = Boolean(step && STEP_PREV[step]);
 
   return (
     <div className="flex flex-col h-screen bg-bg-base overflow-hidden">
-      {/* Header */}
       <header className="flex items-center justify-between px-4 border-b border-border bg-white shrink-0" style={{ height: 52 }}>
         <div className="flex items-center gap-3">
           <BookOpen size={20} className="text-primary" strokeWidth={1.5} />
           <span className="font-semibold text-text-primary text-base">ScholarCLI</span>
 
-          {/* Step navigation */}
           {showSteps && (
             <div className="flex items-center gap-1 ml-6">
-              {STEPS.map((s, idx) => {
-                const isCurrent = s.key === step;
-                const isDone = STEPS.findIndex((x) => x.key === step) > idx;
+              {STEPS.map((item, idx) => {
+                const isCurrent = item.key === step;
+                const isDone = currentStepIndex > idx;
+
                 return (
-                  <div key={s.key} className="flex items-center">
-                    {idx > 0 && (
-                      <span className="w-6 h-px bg-border mx-1" />
-                    )}
+                  <div key={item.key} className="flex items-center">
+                    {idx > 0 && <span className="w-6 h-px bg-border mx-1" />}
                     <button
-                      onClick={() => projectId && navigate(`/projects/${projectId}/${s.path}`)}
+                      onClick={() => projectId && navigate(`/projects/${projectId}/${item.path}`)}
                       className={cn(
                         'flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium transition-colors',
                         isCurrent && 'bg-primary text-white',
@@ -74,15 +75,17 @@ export function Layout() {
                       )}
                       disabled={!isCurrent && !isDone}
                     >
-                      <span className={cn(
-                        'w-4 h-4 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0',
-                        isCurrent && 'bg-white/30 text-white',
-                        isDone && !isCurrent && 'bg-primary text-white',
-                        !isCurrent && !isDone && 'bg-border text-text-tertiary',
-                      )}>
+                      <span
+                        className={cn(
+                          'w-4 h-4 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0',
+                          isCurrent && 'bg-white/30 text-white',
+                          isDone && !isCurrent && 'bg-primary text-white',
+                          !isCurrent && !isDone && 'bg-border text-text-tertiary',
+                        )}
+                      >
                         {idx + 1}
                       </span>
-                      {s.label}
+                      {item.label}
                     </button>
                   </div>
                 );
@@ -92,8 +95,7 @@ export function Layout() {
         </div>
 
         <div className="flex items-center gap-3">
-          {/* Back button */}
-          {showSteps && (
+          {showSteps && canGoBack && (
             <button
               onClick={handleBack}
               className="flex items-center gap-1 text-sm text-text-secondary hover:text-text-primary transition-colors"
@@ -105,7 +107,6 @@ export function Layout() {
 
           <span className="text-sm text-text-secondary">{user?.name || user?.email}</span>
 
-          {/* Admin entry — only visible to admins */}
           {isAdmin && (
             <a
               href="/admin"
@@ -127,11 +128,10 @@ export function Layout() {
       </header>
 
       <div className="flex flex-1 overflow-hidden">
-        {/* Left Nav */}
         <nav className="w-sidebar shrink-0 bg-bg-subtle border-r border-border flex flex-col py-2">
           {[
             { to: '/projects/new', icon: PenLine, label: '辅助写作' },
-            { to: '/projects',     icon: History,  label: '历史记录' },
+            { to: '/projects', icon: History, label: '历史记录' },
           ].map(({ to, icon: Icon, label }) => (
             <NavLink
               key={to}
@@ -151,7 +151,6 @@ export function Layout() {
           ))}
         </nav>
 
-        {/* Main */}
         <main className="flex-1 overflow-y-auto">
           <Outlet />
         </main>

@@ -1,19 +1,20 @@
-import { useEffect, useState, useCallback } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import { useDropzone } from 'react-dropzone';
-import { Upload, Trash2, CheckCircle, FileText, ClipboardPaste, X, Search } from 'lucide-react';
+import axios from 'axios';
+import {
+  CheckCircle,
+  ChevronRight,
+  FileText,
+  Search,
+  Trash2,
+  Upload,
+  X,
+} from 'lucide-react';
 import { literatureApi } from '../api';
+import type { Literature } from '../types';
 import { Button } from '../../../shared/components/Button';
 import { Spinner } from '../../../shared/components/Spinner';
-
-interface Literature {
-  id: string;
-  title: string;
-  authors: string[];
-  year: number | null;
-  abstract: string | null;
-  source: string | null;
-}
 
 const ACCEPTED_TYPES = {
   'application/pdf': ['.pdf'],
@@ -22,18 +23,105 @@ const ACCEPTED_TYPES = {
   'text/markdown': ['.md'],
 };
 
+type IntakeMode = 'ai-search' | 'upload' | 'paste';
+
+function createDefaultCheckedIds(items: Literature[]) {
+  return new Set(items.filter((item) => !item.confirmed).map((item) => item.id));
+}
+
+function getErrorMessage(error: unknown, fallback: string) {
+  if (axios.isAxiosError(error)) {
+    return error.response?.data?.error?.message || fallback;
+  }
+  if (error instanceof Error && error.message) return error.message;
+  return fallback;
+}
+
+function formatMeta(literature: Literature) {
+  const parts = [
+    literature.authors.length > 0 ? literature.authors.join(', ') : null,
+    literature.year ? String(literature.year) : null,
+    literature.source || null,
+  ].filter(Boolean);
+
+  return parts.length > 0 ? parts.join(' · ') : '暂无作者 / 来源信息';
+}
+
+function LiteratureCard({
+  literature,
+  checked,
+  selectable = false,
+  action,
+  onToggle,
+  onDelete,
+  deleteLabel = '删除文献',
+}: {
+  literature: Literature;
+  checked?: boolean;
+  selectable?: boolean;
+  action?: ReactNode;
+  onToggle?: (checked: boolean) => void;
+  onDelete: () => void;
+  deleteLabel?: string;
+}) {
+  return (
+    <div className="rounded-2xl border border-border/70 bg-white p-5 shadow-sm">
+      <div className="flex items-start gap-3">
+        {selectable ? (
+          <input
+            type="checkbox"
+            className="mt-1 h-4 w-4 rounded border-border text-primary focus:ring-primary"
+            checked={checked}
+            onChange={(event) => onToggle?.(event.target.checked)}
+          />
+        ) : (
+          <FileText size={18} className="mt-0.5 shrink-0 text-text-tertiary" strokeWidth={1.5} />
+        )}
+
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-sm font-medium leading-6 text-text-primary">{literature.title}</p>
+              <p className="mt-1 text-xs leading-5 text-text-secondary">{formatMeta(literature)}</p>
+            </div>
+            <button
+              type="button"
+              onClick={onDelete}
+              className="shrink-0 text-text-tertiary transition-colors hover:text-danger"
+              aria-label={deleteLabel}
+              title={deleteLabel}
+            >
+              <Trash2 size={16} strokeWidth={1.5} />
+            </button>
+          </div>
+
+          {literature.abstract ? (
+            <p className="mt-3 line-clamp-3 text-xs leading-6 text-text-tertiary">{literature.abstract}</p>
+          ) : null}
+
+          {action ? <div className="mt-4">{action}</div> : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function LiteraturePage() {
   const { id: projectId } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [items, setItems] = useState<Literature[]>([]);
+  const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
-  const [pasteMode, setPasteMode] = useState(false);
-  const [pasteText, setPasteText] = useState('');
-  const [pasteTitle, setPasteTitle] = useState('');
   const [submittingPaste, setSubmittingPaste] = useState(false);
   const [aiSearching, setAiSearching] = useState(false);
   const [showSearchParams, setShowSearchParams] = useState(false);
+  const [intakeMode, setIntakeMode] = useState<IntakeMode>('ai-search');
+  const [mutatingItemId, setMutatingItemId] = useState<string | null>(null);
+  const [mutatingSelection, setMutatingSelection] = useState(false);
+  const [error, setError] = useState('');
+  const [pasteText, setPasteText] = useState('');
+  const [pasteTitle, setPasteTitle] = useState('');
   const [searchParams, setSearchParams] = useState({
     totalCount: 20,
     cnCount: 15,
@@ -42,26 +130,70 @@ export function LiteraturePage() {
     keywords: '',
   });
 
+  const syncItems = useCallback((nextItems: Literature[]) => {
+    setItems(nextItems);
+    setCheckedIds((prev) => {
+      const next = new Set<string>();
+      const defaultChecked = createDefaultCheckedIds(nextItems);
+
+      for (const id of prev) {
+        if (defaultChecked.has(id)) next.add(id);
+      }
+
+      for (const id of defaultChecked) {
+        if (!prev.has(id)) next.add(id);
+      }
+
+      return next;
+    });
+  }, []);
+
   useEffect(() => {
     if (!projectId) return;
-    literatureApi.list(projectId).then((res) => {
-      setItems(res.data.data || []);
-    }).finally(() => setLoading(false));
+
+    literatureApi.list(projectId)
+      .then((res) => {
+        const loadedItems = (res.data.data || []) as Literature[];
+        setItems(loadedItems);
+        setCheckedIds(createDefaultCheckedIds(loadedItems));
+      })
+      .catch((err) => {
+        setError(getErrorMessage(err, '加载文献失败，请刷新重试'));
+      })
+      .finally(() => setLoading(false));
   }, [projectId]);
+
+  const appendItems = useCallback((newItems: Literature[]) => {
+    setItems((prev) => {
+      const existingIds = new Set(prev.map((item) => item.id));
+      return [...prev, ...newItems.filter((item) => !existingIds.has(item.id))];
+    });
+
+    setCheckedIds((prev) => {
+      const next = new Set(prev);
+      for (const item of newItems) {
+        if (!item.confirmed) next.add(item.id);
+      }
+      return next;
+    });
+  }, []);
 
   const onDrop = useCallback(async (files: File[]) => {
     if (!projectId) return;
+
+    setError('');
     setUploading(true);
-    for (const file of files) {
-      try {
+    try {
+      for (const file of files) {
         const res = await literatureApi.upload(projectId, file);
-        setItems((prev) => [...prev, res.data.data]);
-      } catch (err) {
-        console.error('Upload failed:', err);
+        appendItems([res.data.data as Literature]);
       }
+    } catch (err) {
+      setError(getErrorMessage(err, '上传文献失败，请重试'));
+    } finally {
+      setUploading(false);
     }
-    setUploading(false);
-  }, [projectId]);
+  }, [appendItems, projectId]);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
@@ -69,20 +201,38 @@ export function LiteraturePage() {
     multiple: true,
   });
 
+  const candidateItems = useMemo(
+    () => items.filter((item) => !item.confirmed),
+    [items]
+  );
+
+  const selectedItems = useMemo(
+    () => items.filter((item) => item.confirmed),
+    [items]
+  );
+
+  const selectedCandidateIds = useMemo(
+    () => candidateItems.filter((item) => checkedIds.has(item.id)).map((item) => item.id),
+    [candidateItems, checkedIds]
+  );
+
+  const allCandidatesChecked = candidateItems.length > 0 && selectedCandidateIds.length === candidateItems.length;
+
   const handlePasteSubmit = async () => {
     if (!projectId || !pasteText.trim()) return;
+
+    setError('');
     setSubmittingPaste(true);
     try {
       const res = await literatureApi.uploadText(projectId, {
         title: pasteTitle.trim() || '粘贴文献',
         text: pasteText.trim(),
       });
-      setItems((prev) => [...prev, res.data.data]);
+      appendItems([res.data.data as Literature]);
       setPasteText('');
       setPasteTitle('');
-      setPasteMode(false);
     } catch (err) {
-      console.error('Paste submit failed:', err);
+      setError(getErrorMessage(err, '手动添加文献失败，请重试'));
     } finally {
       setSubmittingPaste(false);
     }
@@ -90,217 +240,397 @@ export function LiteraturePage() {
 
   const handleDelete = async (litId: string) => {
     if (!projectId) return;
-    await literatureApi.delete(projectId, litId);
-    setItems((prev) => prev.filter((l) => l.id !== litId));
+
+    setError('');
+    setMutatingItemId(litId);
+    try {
+      await literatureApi.delete(projectId, litId);
+      setItems((prev) => prev.filter((item) => item.id !== litId));
+      setCheckedIds((prev) => {
+        const next = new Set(prev);
+        next.delete(litId);
+        return next;
+      });
+    } catch (err) {
+      setError(getErrorMessage(err, '删除文献失败，请重试'));
+    } finally {
+      setMutatingItemId(null);
+    }
   };
 
   const handleAiSearch = async () => {
     if (!projectId) return;
+
+    setError('');
     setAiSearching(true);
     try {
       const res = await literatureApi.aiSearch(projectId, searchParams);
-      const newItems: Literature[] = res.data.data || [];
-      setItems((prev) => {
-        const existingIds = new Set(prev.map((l) => l.id));
-        return [...prev, ...newItems.filter((l) => !existingIds.has(l.id))];
-      });
+      appendItems((res.data.data || []) as Literature[]);
     } catch (err) {
-      console.error('AI search failed:', err);
+      setError(getErrorMessage(err, 'AI 搜索文献失败，请重试'));
     } finally {
       setAiSearching(false);
     }
   };
 
-  const handleConfirm = async () => {
-    if (!projectId) return;
-    await literatureApi.confirm(projectId);
-    navigate(`/projects/${projectId}/materials`);
+  const handleSelectionUpdate = async (literatureIds: string[], confirmed: boolean) => {
+    if (!projectId || literatureIds.length === 0) return;
+
+    setError('');
+    setMutatingSelection(true);
+    try {
+      const res = await literatureApi.updateSelection(projectId, { literatureIds, confirmed });
+      syncItems((res.data.data || []) as Literature[]);
+    } catch (err) {
+      setError(getErrorMessage(err, confirmed ? '添加引用失败，请重试' : '移回候选区失败，请重试'));
+    } finally {
+      setMutatingSelection(false);
+    }
   };
 
-  if (loading) return <div className="flex items-center justify-center h-full"><Spinner size="lg" /></div>;
+  const handleConfirm = async () => {
+    if (!projectId) return;
+
+    setError('');
+    try {
+      await literatureApi.confirm(projectId);
+      navigate(`/projects/${projectId}/materials`);
+    } catch (err) {
+      setError(getErrorMessage(err, '确认文献失败，请重试'));
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex h-full items-center justify-center">
+        <Spinner size="lg" />
+      </div>
+    );
+  }
 
   return (
-    <div className="max-w-3xl mx-auto px-6 py-10">
-      <div className="mb-8">
-        <h1 className="text-2xl font-semibold text-text-primary">文献管理</h1>
-        <p className="mt-1 text-sm text-text-secondary">上传参考文献，AI 将自动提取元数据</p>
-      </div>
+    <div className="flex h-full bg-bg-base">
+      <div className="flex min-w-0 flex-1 flex-col">
+        <div className="flex-1 overflow-y-auto px-8 py-8">
+          <div className="mx-auto max-w-4xl space-y-9">
+            <div className="space-y-3">
+              <h1 className="text-2xl font-semibold tracking-tight text-text-primary">文献管理</h1>
+              <p className="max-w-3xl text-xs leading-6 text-text-tertiary">
+                搜索、上传、手动添加都会进入候选文献，再从中筛选到右侧引用栏。
+              </p>
+            </div>
 
-      {/* AI Search */}
-      <div className="mb-4 border border-border rounded-lg overflow-hidden">
-        <div className="p-4 bg-bg-subtle flex items-center justify-between">
-          <div>
-            <p className="text-sm font-medium text-text-primary">AI 智能搜索</p>
-            <p className="text-xs text-text-secondary mt-0.5">根据你的论文主题，AI 自动推荐相关参考文献</p>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setShowSearchParams((v) => !v)}
-              className="text-xs text-primary hover:underline"
-            >
-              {showSearchParams ? '收起设置' : '搜索设置'}
-            </button>
-            <Button variant="secondary" size="sm" onClick={handleAiSearch} disabled={aiSearching}>
-              {aiSearching ? <Spinner size="sm" /> : <Search size={14} strokeWidth={1.5} className="mr-1.5" />}
-              {aiSearching ? 'AI 搜索中...' : 'AI 搜索文献'}
-            </Button>
-          </div>
-        </div>
-        {showSearchParams && (
-          <div className="px-4 pb-4 pt-2 bg-white border-t border-border grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs text-text-secondary mb-1">总篇数</label>
-              <input
-                type="number" min={5} max={50}
-                className="w-full px-2 py-1.5 text-sm border border-border rounded focus:outline-none focus:ring-1 focus:ring-primary"
-                value={searchParams.totalCount}
-                onChange={(e) => setSearchParams((p) => ({ ...p, totalCount: Number(e.target.value) }))}
-              />
-            </div>
-            <div>
-              <label className="block text-xs text-text-secondary mb-1">近几年（发表时间）</label>
-              <input
-                type="number" min={1} max={20}
-                className="w-full px-2 py-1.5 text-sm border border-border rounded focus:outline-none focus:ring-1 focus:ring-primary"
-                value={searchParams.years}
-                onChange={(e) => setSearchParams((p) => ({ ...p, years: Number(e.target.value) }))}
-              />
-            </div>
-            <div>
-              <label className="block text-xs text-text-secondary mb-1">中文篇数</label>
-              <input
-                type="number" min={0} max={50}
-                className="w-full px-2 py-1.5 text-sm border border-border rounded focus:outline-none focus:ring-1 focus:ring-primary"
-                value={searchParams.cnCount}
-                onChange={(e) => setSearchParams((p) => ({ ...p, cnCount: Number(e.target.value) }))}
-              />
-            </div>
-            <div>
-              <label className="block text-xs text-text-secondary mb-1">英文篇数</label>
-              <input
-                type="number" min={0} max={50}
-                className="w-full px-2 py-1.5 text-sm border border-border rounded focus:outline-none focus:ring-1 focus:ring-primary"
-                value={searchParams.enCount}
-                onChange={(e) => setSearchParams((p) => ({ ...p, enCount: Number(e.target.value) }))}
-              />
-            </div>
-            <div className="col-span-2">
-              <label className="block text-xs text-text-secondary mb-1">关键词（留空则从大纲自动提取）</label>
-              <input
-                type="text"
-                className="w-full px-2 py-1.5 text-sm border border-border rounded focus:outline-none focus:ring-1 focus:ring-primary"
-                placeholder="如：机器学习, 自然语言处理"
-                value={searchParams.keywords}
-                onChange={(e) => setSearchParams((p) => ({ ...p, keywords: e.target.value }))}
-              />
-            </div>
-          </div>
-        )}
-      </div>
+            {error ? (
+              <div className="rounded-2xl border border-danger/30 bg-red-50 px-4 py-3 text-sm text-red-700">
+                {error}
+              </div>
+            ) : null}
 
-      {/* Upload Zone */}
-      <div
-        {...getRootProps()}
-        className={`border-2 border-dashed rounded-lg p-10 text-center cursor-pointer transition-colors mb-3 ${
-          isDragActive ? 'border-primary bg-primary-subtle' : 'border-border hover:border-border-strong'
-        }`}
-      >
-        <input {...getInputProps()} />
-        {uploading ? (
-          <div className="flex flex-col items-center gap-2">
-            <Spinner size="md" />
-            <p className="text-sm text-text-secondary">正在解析文献...</p>
-          </div>
-        ) : (
-          <div className="flex flex-col items-center gap-2">
-            <Upload size={32} className="text-text-tertiary" strokeWidth={1.5} />
-            <p className="text-sm text-text-primary font-medium">
-              {isDragActive ? '松开以上传' : '拖拽文件到此处，或点击选择'}
-            </p>
-            <p className="text-xs text-text-tertiary">支持 PDF、DOCX、TXT、MD 格式，可多文件同时上传</p>
-          </div>
-        )}
-      </div>
+            <section className="rounded-3xl border border-border/70 bg-white px-6 py-6 shadow-sm">
+              <div className="space-y-6">
+                <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                  <div className="space-y-1">
+                    <h2 className="text-lg font-semibold text-text-primary">添加文献</h2>
+                    <p className="text-xs text-text-tertiary">统一入口，减少操作切换成本。</p>
+                  </div>
+                  <div className="rounded-full bg-bg-subtle px-3 py-1 text-xs text-text-secondary">
+                    候选 {candidateItems.length} 篇
+                  </div>
+                </div>
 
-      {/* Paste text toggle */}
-      <div className="mb-6">
-        <button
-          onClick={() => setPasteMode((v) => !v)}
-          className="flex items-center gap-1.5 text-sm text-primary hover:underline"
-        >
-          <ClipboardPaste size={15} strokeWidth={1.5} />
-          {pasteMode ? '收起' : '直接粘贴文献文本'}
-        </button>
+                <div className="flex flex-wrap gap-3">
+                  {[
+                    { key: 'ai-search', label: 'AI 智能搜索' },
+                    { key: 'upload', label: '上传文档' },
+                    { key: 'paste', label: '手动添加文献' },
+                  ].map((item) => (
+                    <button
+                      key={item.key}
+                      type="button"
+                      onClick={() => setIntakeMode(item.key as IntakeMode)}
+                      className={`rounded-full px-4 py-2 text-sm transition-colors ${
+                        intakeMode === item.key
+                          ? 'bg-primary text-white shadow-sm'
+                          : 'bg-bg-subtle text-text-secondary hover:bg-bg-muted hover:text-text-primary'
+                      }`}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
 
-        {pasteMode && (
-          <div className="mt-3 border border-border rounded-lg p-4 bg-white space-y-3">
-            <input
-              className="w-full px-3 py-2 text-sm border border-border rounded focus:outline-none focus:ring-2 focus:ring-primary"
-              placeholder="文献标题（可选）"
-              value={pasteTitle}
-              onChange={(e) => setPasteTitle(e.target.value)}
-            />
-            <textarea
-              className="w-full px-3 py-2 text-sm border border-border rounded focus:outline-none focus:ring-2 focus:ring-primary resize-none"
-              rows={6}
-              placeholder="粘贴文献摘要或全文..."
-              value={pasteText}
-              onChange={(e) => setPasteText(e.target.value)}
-            />
-            <div className="flex justify-end gap-2">
-              <Button variant="ghost" size="sm" onClick={() => { setPasteMode(false); setPasteText(''); setPasteTitle(''); }}>
-                <X size={14} className="mr-1" />取消
-              </Button>
-              <Button variant="primary" size="sm" onClick={handlePasteSubmit} disabled={!pasteText.trim() || submittingPaste}>
-                {submittingPaste ? <Spinner size="sm" /> : '添加文献'}
-              </Button>
-            </div>
-          </div>
-        )}
-      </div>
+                {intakeMode === 'ai-search' ? (
+                  <div className="rounded-2xl bg-bg-subtle/35 p-5">
+                    <div className="space-y-5">
+                      <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+                        <div className="space-y-2">
+                          <p className="text-sm font-medium text-text-primary">根据论文主题快速生成候选文献</p>
+                          <p className="text-xs leading-6 text-text-tertiary">适合先铺一批文献，再进入候选区做筛选。</p>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <button
+                            type="button"
+                            onClick={() => setShowSearchParams((value) => !value)}
+                            className="text-xs text-primary hover:underline"
+                          >
+                            {showSearchParams ? '收起高级设置' : '高级设置'}
+                          </button>
+                          <Button variant="secondary" size="sm" onClick={handleAiSearch} disabled={aiSearching}>
+                            {aiSearching ? <Spinner size="sm" /> : <Search size={14} strokeWidth={1.5} className="mr-1.5" />}
+                            {aiSearching ? '搜索中...' : '开始搜索'}
+                          </Button>
+                        </div>
+                      </div>
 
-      {/* Literature List */}
-      {items.length > 0 && (
-        <div className="space-y-3 mb-8">
-          <p className="text-sm font-medium text-text-primary">已添加文献（{items.length} 篇）</p>
-          {items.map((lit) => (
-            <div key={lit.id} className="flex items-start gap-3 p-4 bg-white border border-border rounded-lg">
-              <FileText size={20} className="text-text-tertiary shrink-0 mt-0.5" strokeWidth={1.5} />
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-text-primary">{lit.title}</p>
-                <p className="text-xs text-text-secondary mt-0.5">
-                  {lit.authors.join(', ')}{lit.year ? ` · ${lit.year}` : ''}
-                  {lit.source ? ` · ${lit.source}` : ''}
-                </p>
-                {lit.abstract && (
-                  <p className="text-xs text-text-tertiary mt-1 line-clamp-2">{lit.abstract}</p>
+                      {showSearchParams ? (
+                        <div className="grid grid-cols-1 gap-4 rounded-2xl border border-border/70 bg-white p-4 md:grid-cols-2">
+                          <div>
+                            <label className="mb-1 block text-xs text-text-secondary">总篇数</label>
+                            <input
+                              type="number"
+                              min={5}
+                              max={50}
+                              className="w-full rounded border border-border px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                              value={searchParams.totalCount}
+                              onChange={(event) => setSearchParams((prev) => ({ ...prev, totalCount: Number(event.target.value) }))}
+                            />
+                          </div>
+                          <div>
+                            <label className="mb-1 block text-xs text-text-secondary">近几年</label>
+                            <input
+                              type="number"
+                              min={1}
+                              max={20}
+                              className="w-full rounded border border-border px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                              value={searchParams.years}
+                              onChange={(event) => setSearchParams((prev) => ({ ...prev, years: Number(event.target.value) }))}
+                            />
+                          </div>
+                          <div>
+                            <label className="mb-1 block text-xs text-text-secondary">中文篇数</label>
+                            <input
+                              type="number"
+                              min={0}
+                              max={50}
+                              className="w-full rounded border border-border px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                              value={searchParams.cnCount}
+                              onChange={(event) => setSearchParams((prev) => ({ ...prev, cnCount: Number(event.target.value) }))}
+                            />
+                          </div>
+                          <div>
+                            <label className="mb-1 block text-xs text-text-secondary">英文篇数</label>
+                            <input
+                              type="number"
+                              min={0}
+                              max={50}
+                              className="w-full rounded border border-border px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                              value={searchParams.enCount}
+                              onChange={(event) => setSearchParams((prev) => ({ ...prev, enCount: Number(event.target.value) }))}
+                            />
+                          </div>
+                          <div className="md:col-span-2">
+                            <label className="mb-1 block text-xs text-text-secondary">关键词</label>
+                            <input
+                              type="text"
+                              className="w-full rounded border border-border px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                              placeholder="留空时自动从大纲提取"
+                              value={searchParams.keywords}
+                              onChange={(event) => setSearchParams((prev) => ({ ...prev, keywords: event.target.value }))}
+                            />
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
+
+                {intakeMode === 'upload' ? (
+                  <div
+                    {...getRootProps()}
+                    className={`cursor-pointer rounded-2xl border-2 border-dashed p-10 text-center transition-colors ${
+                      isDragActive ? 'border-primary bg-primary-subtle' : 'border-border hover:border-border-strong'
+                    }`}
+                  >
+                    <input {...getInputProps()} />
+                    {uploading ? (
+                      <div className="flex flex-col items-center gap-3">
+                        <Spinner size="md" />
+                        <p className="text-sm text-text-secondary">正在解析文献...</p>
+                      </div>
+                    ) : (
+                      <div className="flex flex-col items-center gap-3">
+                        <Upload size={28} className="text-text-tertiary" strokeWidth={1.5} />
+                        <p className="text-sm font-medium text-text-primary">
+                          {isDragActive ? '松开以上传文献' : '拖拽文件到此处，或点击选择'}
+                        </p>
+                        <p className="max-w-xl text-xs leading-6 text-text-tertiary">
+                          支持 PDF、DOCX、TXT、MD，上传后自动进入候选池。
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                ) : null}
+
+                {intakeMode === 'paste' ? (
+                  <div className="rounded-2xl bg-bg-subtle/35 p-5">
+                    <div className="space-y-4">
+                      <div className="space-y-2">
+                        <p className="text-sm font-medium text-text-primary">手动录入文献信息</p>
+                        <p className="text-xs leading-6 text-text-tertiary">
+                          适合从数据库或文献管理工具复制标题、摘要、引用文本后快速入池。
+                        </p>
+                      </div>
+                      <div className="space-y-4 rounded-2xl border border-border/70 bg-white p-4">
+                        <input
+                          className="w-full rounded border border-border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                          placeholder="文献标题，可选"
+                          value={pasteTitle}
+                          onChange={(event) => setPasteTitle(event.target.value)}
+                        />
+                        <textarea
+                          className="w-full resize-none rounded border border-border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                          rows={5}
+                          placeholder="粘贴文献摘要或全文"
+                          value={pasteText}
+                          onChange={(event) => setPasteText(event.target.value)}
+                        />
+                        <div className="flex justify-end gap-2">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              setPasteText('');
+                              setPasteTitle('');
+                            }}
+                          >
+                            <X size={14} className="mr-1" />
+                            清空
+                          </Button>
+                          <Button variant="primary" size="sm" onClick={handlePasteSubmit} disabled={!pasteText.trim() || submittingPaste}>
+                            {submittingPaste ? <Spinner size="sm" /> : '添加文献'}
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            </section>
+
+            <section className="rounded-3xl border border-border/70 bg-white p-6 shadow-sm">
+              <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+                <div className="space-y-2">
+                  <h2 className="text-lg font-semibold text-text-primary">候选文献</h2>
+                  <p className="text-xs leading-6 text-text-tertiary">默认勾选，但不会自动加入最终引用。</p>
+                </div>
+                <div className="flex flex-wrap items-center gap-3">
+                  <button
+                    type="button"
+                    className="text-xs text-primary hover:underline"
+                    onClick={() => setCheckedIds(allCandidatesChecked ? new Set() : new Set(candidateItems.map((item) => item.id)))}
+                    disabled={candidateItems.length === 0}
+                  >
+                    {allCandidatesChecked ? '取消全选' : '全选候选'}
+                  </button>
+                  <Button
+                    size="sm"
+                    onClick={() => handleSelectionUpdate(selectedCandidateIds, true)}
+                    disabled={selectedCandidateIds.length === 0 || mutatingSelection}
+                  >
+                    {mutatingSelection ? <Spinner size="sm" /> : <ChevronRight size={14} strokeWidth={1.5} className="mr-1.5" />}
+                    添加引用（{selectedCandidateIds.length}）
+                  </Button>
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                {candidateItems.length === 0 ? (
+                  <div className="rounded-2xl border border-dashed border-border bg-bg-subtle/25 px-6 py-12 text-center text-sm text-text-tertiary">
+                    暂无候选文献，先从上面的统一入口里搜索、上传或手动添加。
+                  </div>
+                ) : (
+                  candidateItems.map((literature) => (
+                    <LiteratureCard
+                      key={literature.id}
+                      literature={literature}
+                      selectable
+                      checked={checkedIds.has(literature.id)}
+                      action={(
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => handleSelectionUpdate([literature.id], true)}
+                          disabled={mutatingSelection}
+                        >
+                          添加引用
+                        </Button>
+                      )}
+                      onToggle={(checked) => {
+                        setCheckedIds((prev) => {
+                          const next = new Set(prev);
+                          if (checked) next.add(literature.id);
+                          else next.delete(literature.id);
+                          return next;
+                        });
+                      }}
+                      onDelete={() => handleDelete(literature.id)}
+                    />
+                  ))
                 )}
               </div>
-              <button
-                onClick={() => handleDelete(lit.id)}
-                className="text-text-tertiary hover:text-danger transition-colors shrink-0"
-              >
-                <Trash2 size={16} strokeWidth={1.5} />
-              </button>
-            </div>
-          ))}
+            </section>
+          </div>
         </div>
-      )}
+      </div>
 
-      {items.length === 0 && !uploading && (
-        <p className="text-center text-sm text-text-tertiary py-8">
-          暂无文献，可以直接跳过此步骤
-        </p>
-      )}
+      <div className="flex w-80 flex-col overflow-hidden border-l border-border/70 bg-bg-subtle/60">
+        <div className="border-b border-border/70 px-4 py-4">
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-medium text-text-primary">已添加引用</span>
+            <span className="rounded-full bg-white px-2.5 py-1 text-xs text-text-secondary">
+              {selectedItems.length} 篇
+            </span>
+          </div>
+          <p className="mt-2 text-xs leading-6 text-text-tertiary">这里存放最终参与后续生成的文献。</p>
+        </div>
 
-      <div className="flex gap-3">
-        <Button variant="secondary" onClick={handleConfirm}>
-          跳过此步骤
-        </Button>
-        <Button variant="primary" onClick={handleConfirm} disabled={uploading}>
-          <CheckCircle size={16} strokeWidth={1.5} className="mr-1.5" />
-          确认文献（{items.length} 篇）
-        </Button>
+        <div className="flex-1 overflow-y-auto px-4 py-4">
+          <div className="space-y-4">
+            {selectedItems.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-border bg-white px-5 py-10 text-center text-sm text-text-tertiary">
+                还没有加入最终引用的文献。
+              </div>
+            ) : (
+              selectedItems.map((literature) => (
+                <LiteratureCard
+                  key={literature.id}
+                  literature={literature}
+                  onDelete={() => handleSelectionUpdate([literature.id], false)}
+                  deleteLabel="移回候选区"
+                />
+              ))
+            )}
+          </div>
+        </div>
+
+        <div className="border-t border-border/70 px-4 py-4">
+          <button
+            type="button"
+            onClick={handleConfirm}
+            className="mb-4 text-xs text-text-tertiary transition-colors hover:text-text-secondary"
+          >
+            跳过此步骤
+          </button>
+          <Button
+            variant="primary"
+            className="w-full"
+            onClick={handleConfirm}
+            disabled={uploading || submittingPaste || aiSearching || mutatingSelection || mutatingItemId !== null}
+          >
+            <CheckCircle size={16} strokeWidth={1.5} className="mr-1.5" />
+            确认文献并进入下一步（{selectedItems.length} 篇）
+          </Button>
+        </div>
       </div>
     </div>
   );

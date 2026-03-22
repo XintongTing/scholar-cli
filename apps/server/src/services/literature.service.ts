@@ -55,9 +55,27 @@ export async function uploadLiteratureText(
 }
 
 export async function confirmLiterature(projectId: string) {
-  await litRepo.confirmAll(projectId);
   await projectRepo.updateStatus(projectId, 'MATERIALS');
   return projectRepo.findById(projectId);
+}
+
+export async function updateLiteratureSelection(
+  projectId: string,
+  literatureIds: string[],
+  confirmed: boolean
+) {
+  if (literatureIds.length === 0) return [];
+
+  const items = await litRepo.findByProjectId(projectId);
+  const itemIds = new Set(items.map((item) => item.id));
+  const validIds = literatureIds.filter((id) => itemIds.has(id));
+
+  if (validIds.length === 0) {
+    throw Object.assign(new Error('Literature not found'), { code: 'NOT_FOUND' });
+  }
+
+  await litRepo.updateConfirmedByIds(projectId, validIds, confirmed);
+  return litRepo.findByProjectId(projectId);
 }
 
 export interface AiSearchParams {

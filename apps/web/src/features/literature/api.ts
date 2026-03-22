@@ -12,7 +12,11 @@ export const literatureApi = {
   uploadText: (projectId: string, data: { title: string; text: string }) =>
     http.post(`/projects/${projectId}/literature/text`, data),
   delete: (projectId: string, litId: string) =>
-    http.delete(`/projects/${projectId}/literature/${litId}`),
+    http.post(`/projects/${projectId}/literature/${litId}/delete`),
+  updateSelection: (
+    projectId: string,
+    data: { literatureIds: string[]; confirmed: boolean }
+  ) => http.post(`/projects/${projectId}/literature/selection`, data),
   confirm: (projectId: string) =>
     http.post(`/projects/${projectId}/literature/confirm`),
   aiSearch: (projectId: string, params?: {
@@ -31,5 +35,9 @@ export const uploadLiterature = (projectId: string, file: File) =>
   literatureApi.upload(projectId, file).then(res => res.data.data);
 export const deleteLiterature = (projectId: string, litId: string) =>
   literatureApi.delete(projectId, litId).then(res => res.data.data);
+export const updateLiteratureSelection = (
+  projectId: string,
+  data: { literatureIds: string[]; confirmed: boolean }
+) => literatureApi.updateSelection(projectId, data).then(res => res.data.data);
 export const confirmLiterature = (projectId: string) =>
   literatureApi.confirm(projectId).then(res => res.data.data);

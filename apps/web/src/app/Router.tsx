@@ -40,6 +40,7 @@ export const router = createBrowserRouter([
       { index: true, element: <Navigate to="/projects" replace /> },
       { path: 'projects', element: <ProjectListPage /> },
       { path: 'projects/new', element: <NewProjectPage /> },
+      { path: 'projects/:id/start', element: <NewProjectPage /> },
       { path: 'projects/:id/outline', element: <OutlinePage /> },
       { path: 'projects/:id/literature', element: <LiteraturePage /> },
       { path: 'projects/:id/materials', element: <MaterialsPage /> },
