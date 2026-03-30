@@ -1,3 +1,4 @@
+import axios from 'axios';
 import { useEffect, useState } from 'react';
 import { getAiConfig, updateAiConfig } from '../../../services/admin.service';
 import type { AiConfig } from '../../../services/admin.service';
@@ -10,6 +11,14 @@ function sourceLabel(source: AiConfig['apiKeySource']) {
   return '未设置';
 }
 
+function getErrorMessage(error: unknown, fallback: string) {
+  if (axios.isAxiosError(error)) {
+    return error.response?.data?.error?.message || fallback;
+  }
+  if (error instanceof Error && error.message) return error.message;
+  return fallback;
+}
+
 export function AiConfigPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -17,26 +26,40 @@ export function AiConfigPage() {
   const [apiKey, setApiKey] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
   const [message, setMessage] = useState('');
+  const [messageType, setMessageType] = useState<'success' | 'error'>('success');
 
-  useEffect(() => {
-    getAiConfig().then((data) => {
+  const loadConfig = async (successMessage?: string) => {
+    try {
+      const data = await getAiConfig();
       setConfig(data);
       setBaseUrl(data.baseUrl || '');
-    }).finally(() => setLoading(false));
+      if (successMessage) {
+        setMessageType('success');
+        setMessage(successMessage);
+      }
+    } catch (error) {
+      setMessageType('error');
+      setMessage(getErrorMessage(error, '读取 AI 配置失败，请刷新后重试。'));
+    }
+  };
+
+  useEffect(() => {
+    loadConfig().finally(() => setLoading(false));
   }, []);
 
   const handleSave = async () => {
     setSaving(true);
     setMessage('');
     try {
-      const data = await updateAiConfig({
+      await updateAiConfig({
         apiKey: apiKey.trim() ? apiKey.trim() : undefined,
         baseUrl: baseUrl.trim(),
       });
-      setConfig(data);
       setApiKey('');
-      setBaseUrl(data.baseUrl || '');
-      setMessage('AI 配置已保存。');
+      await loadConfig('AI 配置已保存并重新加载。');
+    } catch (error) {
+      setMessageType('error');
+      setMessage(getErrorMessage(error, '保存 AI 配置失败，请稍后重试。'));
     } finally {
       setSaving(false);
     }
@@ -46,25 +69,26 @@ export function AiConfigPage() {
     setSaving(true);
     setMessage('');
     try {
-      const data = await updateAiConfig({
+      await updateAiConfig({
         apiKey: '',
         baseUrl: '',
       });
-      setConfig(data);
       setApiKey('');
-      setBaseUrl(data.baseUrl || '');
-      setMessage('已清除数据库覆盖配置，当前回退使用环境变量。');
+      await loadConfig('已清除数据库覆盖配置，当前回退使用环境变量。');
+    } catch (error) {
+      setMessageType('error');
+      setMessage(getErrorMessage(error, '恢复环境变量失败，请稍后重试。'));
     } finally {
       setSaving(false);
     }
   };
 
   if (loading) {
-    return <div className="flex items-center justify-center h-full"><Spinner size="lg" /></div>;
+    return <div className="flex h-full items-center justify-center"><Spinner size="lg" /></div>;
   }
 
   return (
-    <div className="max-w-3xl mx-auto px-6 py-10">
+    <div className="mx-auto max-w-3xl px-6 py-10">
       <div className="mb-8">
         <h1 className="text-2xl font-semibold text-text-primary">AI 配置</h1>
         <p className="mt-1 text-sm text-text-secondary">在后台管理 Anthropic 的 API Key 与代理地址配置。</p>
@@ -82,7 +106,7 @@ export function AiConfigPage() {
 
           <div className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-text-primary mb-1">ANTHROPIC_API_KEY</label>
+              <label className="mb-1 block text-sm font-medium text-text-primary">ANTHROPIC_API_KEY</label>
               <input
                 type="password"
                 value={apiKey}
@@ -94,7 +118,7 @@ export function AiConfigPage() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-text-primary mb-1">ANTHROPIC_BASE_URL</label>
+              <label className="mb-1 block text-sm font-medium text-text-primary">ANTHROPIC_BASE_URL</label>
               <input
                 type="text"
                 value={baseUrl}
@@ -113,7 +137,11 @@ export function AiConfigPage() {
             <Button variant="secondary" onClick={handleResetToEnv} disabled={saving}>
               恢复环境变量
             </Button>
-            {message && <span className="text-sm text-text-secondary">{message}</span>}
+            {message && (
+              <span className={`text-sm ${messageType === 'error' ? 'text-red-600' : 'text-text-secondary'}`}>
+                {message}
+              </span>
+            )}
           </div>
         </div>
       </div>
