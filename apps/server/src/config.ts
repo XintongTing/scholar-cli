@@ -16,15 +16,18 @@ export const config = {
     baseUrl: process.env.ANTHROPIC_BASE_URL || ''
   },
   s3: {
+    enabled: process.env.S3_ENABLED === 'true',
     endpoint: process.env.S3_ENDPOINT || 'http://localhost:9000',
     region: process.env.S3_REGION || 'us-east-1',
     bucket: process.env.S3_BUCKET || 'scholarcli',
     accessKey: process.env.S3_ACCESS_KEY || 'minioadmin',
-    secretKey: process.env.S3_SECRET_KEY || 'minioadmin'
+    secretKey: process.env.S3_SECRET_KEY || 'minioadmin',
+    forcePathStyle: process.env.S3_FORCE_PATH_STYLE !== 'false'
   },
   server: {
     port: parseInt(process.env.PORT || '3000', 10),
     nodeEnv: process.env.NODE_ENV || 'development',
-    corsOrigin: process.env.CORS_ORIGIN || 'http://localhost:5173'
+    corsOrigin: process.env.CORS_ORIGIN || 'http://localhost:5173',
+    publicBaseUrl: process.env.PUBLIC_BASE_URL || `http://localhost:${parseInt(process.env.PORT || '3000', 10)}`
   }
 };

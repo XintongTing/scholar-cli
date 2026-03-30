@@ -14,6 +14,7 @@ import { materialsRoutes } from './routes/materials.routes.js';
 import { generationRoutes } from './routes/generation.routes.js';
 import { adminRoutes } from './routes/admin.routes.js';
 import { editorRoutes } from './routes/editor.routes.js';
+import { fileRoutes } from './routes/file.routes.js';
 import { initDefaultPrompts } from './ai/prompt-registry.js';
 
 const fastify = Fastify({ logger: false });
@@ -36,6 +37,7 @@ await fastify.register(materialsRoutes, { prefix: '/api/v1/projects' });
 await fastify.register(generationRoutes, { prefix: '/api/v1/projects' });
 await fastify.register(editorRoutes, { prefix: '/api/v1/projects' });
 await fastify.register(adminRoutes, { prefix: '/api/v1/admin' });
+await fastify.register(fileRoutes, { prefix: '/api/v1' });
 
 fastify.get('/health', async () => ({ status: 'ok', timestamp: new Date().toISOString() }));
 

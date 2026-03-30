@@ -1,4 +1,5 @@
 import { useRef, useState, useCallback } from 'react';
+import { resolveApiPath } from '../config/api';
 
 interface SSEOptions {
   url: string;
@@ -40,7 +41,7 @@ export function useSSEStream(handlers?: EventHandlers) {
 
     try {
       const token = localStorage.getItem('accessToken');
-      const res = await fetch(`http://localhost:3000${url}`, {
+      const res = await fetch(resolveApiPath(url), {
         method,
         headers: {
           'Content-Type': 'application/json',
