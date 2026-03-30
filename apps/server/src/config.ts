@@ -11,6 +11,11 @@ export const config = {
     expiresIn: process.env.JWT_EXPIRES_IN || '15m',
     refreshExpiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d'
   },
+  bootstrapAdmin: {
+    email: process.env.BOOTSTRAP_ADMIN_EMAIL || '',
+    password: process.env.BOOTSTRAP_ADMIN_PASSWORD || '',
+    name: process.env.BOOTSTRAP_ADMIN_NAME || 'Admin'
+  },
   anthropic: {
     apiKey: process.env.ANTHROPIC_API_KEY || '',
     baseUrl: process.env.ANTHROPIC_BASE_URL || ''

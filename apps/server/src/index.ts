@@ -16,6 +16,7 @@ import { adminRoutes } from './routes/admin.routes.js';
 import { editorRoutes } from './routes/editor.routes.js';
 import { fileRoutes } from './routes/file.routes.js';
 import { initDefaultPrompts } from './ai/prompt-registry.js';
+import { ensureBootstrapAdmin } from './services/bootstrap.service.js';
 
 const fastify = Fastify({ logger: false });
 
@@ -53,6 +54,7 @@ fastify.setErrorHandler((error: Error & { statusCode?: number }, _request, reply
 });
 
 try {
+  await ensureBootstrapAdmin();
   await initDefaultPrompts();
   await fastify.listen({ port: config.server.port, host: '0.0.0.0' });
   logger.info(`Server listening on port ${config.server.port}`);
